@@ -1,13 +1,15 @@
-# nano-llada
+# Nano-LLaDA
 
-`nano-llada` 是一个轻量级离散扩散语言模型实验项目。当前版本为 **v0.1.0**，参数规模约 **30M**，在参考开源 `minimind` 与 `tiny-diffusion` 的基础上，实现了 AR 与 Diffusion 双路线的训练、SFT 与评测流程。
+![Nano-LLaDA logo](./logo.png)
+
+`Nano-LLaDA` 是一个轻量级离散扩散语言模型实验项目。当前版本为 **v0.1.0**，参数规模约 **30M**，在参考开源 `minimind` 与 `tiny-diffusion` 的基础上，实现了 AR 与 Diffusion 双路线的训练、SFT 与评测流程。
 
 ## 项目状态
 
 - 当前版本：`v0.1.0`
 - 参数规模：`~30M`
 - 当前能力：完成 LLaDA 1.0 思路的工程化初步复现
-- 进展：经过 SFT 后，`nano-llada` 已初步具备回答问题的能力；当前仍在继续训练与优化，以获得更好的效果。
+- 进展：经过 SFT 后，`Nano-LLaDA` 已初步具备回答问题的能力；当前仍在继续训练与优化，以获得更好的效果。
 - 说明：当前实现尚未对 LLaDA 1.0 原文报告中的技术细节做到完全 1:1 复现，相关模块仍在持续修改与迭代中。
 - 训练路线：
   - AR（MiniMind-style Causal LM）
@@ -90,7 +92,7 @@ uv run python -m scripts.eval.eval_minimind \
   --max-new-tokens 200
 ```
 
-### 3. nano-llada 预训练
+### 3. Nano-LLaDA 预训练
 
 ```bash
 uv run python -m scripts.train.diffusion \
@@ -111,7 +113,7 @@ uv run python -m scripts.train.diffusion \
   --batch-size 96
 ```
 
-### 4. nano-llada 评测
+### 4. Nano-LLaDA 评测
 
 ```bash
 uv run python -m scripts.eval.eval_diffusion \
@@ -122,17 +124,17 @@ uv run python -m scripts.eval.eval_diffusion \
   --max-new-tokens 200
 ```
 
-## nano-llada 预训练 Loss（中文数据集）
+## Nano-LLaDA 预训练 Loss（中文数据集）
 
-以下为 `nano-llada` 在中文数据集上进行 Diffusion 预训练的 loss 曲线结果：
+以下为 `Nano-LLaDA` 在中文数据集上进行 Diffusion 预训练的 loss 曲线结果：
 
 - 训练 `25k` steps：
 
-![nano-llada diffusion pretrain loss on Chinese dataset (25k steps)](./diffusion_from_ar_eq3_loss_cn_25k.png)
+![Nano-LLaDA diffusion pretrain loss on Chinese dataset (25k steps)](./diffusion_from_ar_eq3_loss_cn_25k.png)
 
 - 训练 `40k` steps：
 
-![nano-llada diffusion pretrain loss on Chinese dataset (40k steps)](./diffusion_from_ar_eq3_loss_cn_40k.png)
+![Nano-LLaDA diffusion pretrain loss on Chinese dataset (40k steps)](./diffusion_from_ar_eq3_loss_cn_40k.png)
 
 ### 5. AR SFT
 
@@ -147,7 +149,7 @@ uv run python -m scripts.train.train_sft_minimind \
   --epochs 2
 ```
 
-### 6. nano-llada SFT
+### 6. Nano-LLaDA SFT
 
 ```bash
 uv run python -m scripts.train.train_sft_diffusion \
@@ -198,7 +200,7 @@ uv run python -m scripts.eval.eval_sft_one_prompt \
 项目技术报告见：`technical_report.md`
 
 核心定位：
-- `nano-llada (~30M)` 的工程化实现
+- `Nano-LLaDA (~30M)` 的工程化实现
 - 当前仅为 `v0.1.0`
 - 在本仓库持续精细化实现和迭代优化
 

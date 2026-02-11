@@ -1,6 +1,8 @@
-# nano-llada
+# Nano-LLaDA
 
-`nano-llada` is a lightweight discrete diffusion language model project. The current release is **v0.1.0** with about **30M** parameters. It builds on open-source `minimind` and `tiny-diffusion`, and provides a full AR + Diffusion pipeline for pretraining, SFT, and evaluation.
+![Nano-LLaDA logo](./logo.png)
+
+`Nano-LLaDA` is a lightweight discrete diffusion language model project. The current release is **v0.1.0** with about **30M** parameters. It builds on open-source `minimind` and `tiny-diffusion`, and provides a full AR + Diffusion pipeline for pretraining, SFT, and evaluation.
 
 For the Chinese version of this document, see `README_cn.md`.
 
@@ -9,7 +11,7 @@ For the Chinese version of this document, see `README_cn.md`.
 - Current version: `v0.1.0`
 - Parameter scale: `~30M`
 - Current capability: initial engineering reproduction of the LLaDA 1.0 idea
-- Progress: after SFT, `nano-llada` has gained basic question-answering ability; training and tuning are still ongoing for better results.
+- Progress: after SFT, `Nano-LLaDA` has gained basic question-answering ability; training and tuning are still ongoing for better results.
 - Note: this implementation is not yet a strict 1:1 reproduction of every technical detail from the original LLaDA 1.0 report. We are continuously refining components.
 - Training tracks:
   - AR (MiniMind-style causal LM)
@@ -92,7 +94,7 @@ uv run python -m scripts.eval.eval_minimind \
   --max-new-tokens 200
 ```
 
-### 3. nano-llada Pretraining
+### 3. Nano-LLaDA Pretraining
 
 ```bash
 uv run python -m scripts.train.diffusion \
@@ -113,7 +115,7 @@ uv run python -m scripts.train.diffusion \
   --batch-size 96
 ```
 
-### 4. nano-llada Evaluation
+### 4. Nano-LLaDA Evaluation
 
 ```bash
 uv run python -m scripts.eval.eval_diffusion \
@@ -124,17 +126,17 @@ uv run python -m scripts.eval.eval_diffusion \
   --max-new-tokens 200
 ```
 
-## nano-llada Pretraining Loss (Chinese Dataset)
+## Nano-LLaDA Pretraining Loss (Chinese Dataset)
 
 The following are diffusion pretraining loss curves on the Chinese dataset:
 
 - `25k` steps:
 
-![nano-llada diffusion pretrain loss on Chinese dataset (25k steps)](./diffusion_from_ar_eq3_loss_cn_25k.png)
+![Nano-LLaDA diffusion pretrain loss on Chinese dataset (25k steps)](./diffusion_from_ar_eq3_loss_cn_25k.png)
 
 - `40k` steps:
 
-![nano-llada diffusion pretrain loss on Chinese dataset (40k steps)](./diffusion_from_ar_eq3_loss_cn_40k.png)
+![Nano-LLaDA diffusion pretrain loss on Chinese dataset (40k steps)](./diffusion_from_ar_eq3_loss_cn_40k.png)
 
 ### 5. AR SFT
 
@@ -149,7 +151,7 @@ uv run python -m scripts.train.train_sft_minimind \
   --epochs 2
 ```
 
-### 6. nano-llada SFT
+### 6. Nano-LLaDA SFT
 
 ```bash
 uv run python -m scripts.train.train_sft_diffusion \
@@ -174,7 +176,7 @@ uv run python -m scripts.eval.eval_sft_one_prompt \
   --max-new-tokens 128
 ```
 
-nano-llada SFT:
+Nano-LLaDA SFT:
 ```bash
 uv run python -m scripts.eval.eval_sft_one_prompt \
   --prompt "你好，请介绍你自己。" \
@@ -184,7 +186,7 @@ uv run python -m scripts.eval.eval_sft_one_prompt \
   --max-new-tokens 128
 ```
 
-AR + nano-llada comparison:
+AR + Nano-LLaDA comparison:
 ```bash
 uv run python -m scripts.eval.eval_sft_one_prompt \
   --prompt "你好，请介绍你自己。" \
@@ -200,7 +202,7 @@ uv run python -m scripts.eval.eval_sft_one_prompt \
 See `technical_report.md`.
 
 Positioning:
-- engineering implementation of `nano-llada (~30M)`
+- engineering implementation of `Nano-LLaDA (~30M)`
 - current version is `v0.1.0`
 - continuous iterative refinement in this repository
 
