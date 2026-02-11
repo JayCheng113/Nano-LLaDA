@@ -52,6 +52,7 @@
 ### 二、LLaDA 2.0 训练增强（部分实现）
 
 当前版本集成了 `LLaDA 2.0` 中提出的若干训练稳定化与持续预训练策略：
+本小节中部分能力目前尚未完成端到端系统测试。
 
 - WSD（Warmup-Stable-Decay）Mask Schedule
   - 支持 mask ratio 的 warmup / stable / decay 三阶段
@@ -149,6 +150,8 @@ uv run python -m scripts.eval.eval_minimind \
 ```
 
 ### 3. Nano-LLaDA 预训练
+
+下面这组命令当前采用的是 `LLaDA 1.0 style`。其中主要体现 `LLaDA 2.0` 思想的部分，是通过 `--init-from-minimind` 进行 AR 到 Diffusion 的持续预训练初始化。
 
 ```bash
 uv run python -m scripts.train.diffusion \

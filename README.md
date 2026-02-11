@@ -54,6 +54,7 @@ This mode is the closest to the original `LLaDA 1.0` setting.
 ### 2. LLaDA 2.0 Training Enhancements (Partially Implemented)
 
 The current release includes several stabilization and continual pretraining strategies from `LLaDA 2.0`:
+Some items in this section are not fully tested in end-to-end training yet.
 
 - WSD (Warmup-Stable-Decay) Mask Schedule
   - Supports warmup / stable / decay phases for mask ratio
@@ -151,6 +152,8 @@ uv run python -m scripts.eval.eval_minimind \
 ```
 
 ### 3. Nano-LLaDA Pretraining
+
+The command below currently runs in `LLaDA 1.0` style. The main `LLaDA 2.0`-inspired part is AR-to-diffusion initialization (`--init-from-minimind`) for continual pretraining.
 
 ```bash
 uv run python -m scripts.train.diffusion \
