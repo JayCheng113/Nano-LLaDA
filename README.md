@@ -21,6 +21,62 @@ For the Chinese version of this document, see `README_cn.md`.
 
 We reuse `minimind` for base model construction, dataset format, and tokenizer. We first pretrain an autoregressive model, then build a parameter-matched LLaDA model inspired by LLaDA 2.0 training techniques, initialize it from AR pretrained weights, and continue with SFT and evaluation.
 
+## LLaDA 1.0 / 2.0 Module Mapping
+
+The current `Nano-LLaDA` release implements the core diffusion modeling mechanism from `LLaDA 1.0`, and also introduces several training enhancements proposed in `LLaDA 2.0`. To avoid conceptual confusion, the module mapping is listed below.
+
+### 1. LLaDA 1.0 Core Mechanisms (Implemented)
+
+- Bidirectional Transformer Mask Predictor
+  - Attention is configured as `is_causal=False`
+  - Masked tokens are predicted from full-context conditioning
+- `iid_t` Masking (Eq.3)
+  - Sample `t ~ Uniform(eps, 1-eps)` for each sample
+  - Independently mask each token with `Bernoulli(t)`
+  - Ensure at least one token is masked
+- `1/t`-weighted Masked Cross Entropy
+  - Loss is computed only on masked tokens
+  - Uses Eq.3-style Monte Carlo approximation
+- Iterative Remasking Sampling
+  - Predict all masked tokens at each step
+  - Remask low-confidence tokens by confidence ranking
+  - Use `s/t` ratio to align with the forward process
+
+Enable with:
+
+```bash
+--mask-schedule iid_t
+--repeat-penalty-weight 0
+```
+
+This mode is the closest to the original `LLaDA 1.0` setting.
+
+### 2. LLaDA 2.0 Training Enhancements (Partially Implemented)
+
+The current release includes several stabilization and continual pretraining strategies from `LLaDA 2.0`:
+
+- WSD (Warmup-Stable-Decay) Mask Schedule
+  - Supports warmup / stable / decay phases for mask ratio
+  - Optional block curriculum
+- Block Curriculum
+  - Gradually increase block size during diffusion training
+  - Then shrink block size back for efficiency
+- Time-Weighted Loss
+  - Uses diffusion-time weight `alpha'(t)/(1-alpha(t))`
+  - Replaces the `1/t` approximation form
+- Document-level Attention Mask
+  - Builds document-segmented attention using EOS boundaries
+  - Restricts attention propagation across documents
+
+Example flags:
+
+```bash
+--mask-schedule wsd
+--use-block-curriculum
+--time-weighted-loss
+--use-doc-attention-mask
+```
+
 ## Shared Architecture (AR + LLaDA)
 
 ```mermaid
@@ -216,5 +272,7 @@ Positioning:
 
 ## References
 
+- LLaDA: https://arxiv.org/pdf/2502.09992
+- LLaDA 2.0: https://arxiv.org/abs/2512.15745
 - minimind: https://github.com/jingyaogong/minimind
 - tiny-diffusion: https://github.com/nathan-barry/tiny-diffusion

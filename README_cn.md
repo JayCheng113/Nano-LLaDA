@@ -19,6 +19,62 @@
 
 借用 `minimind` 的模型搭建、数据集与 tokenizer 作为基础配置，先完成一个自回归模型的预训练；随后参考 `LLaDA 2.0` 的训练技巧，搭建一个参数规模与 AR 模型一致的 LLaDA 模型，并加载预训练得到的 AR 权重进行初始化，最后开展后续 SFT 训练与评测。
 
+## LLaDA 1.0 / 2.0 模块对应说明
+
+`Nano-LLaDA` 当前版本实现了 `LLaDA 1.0` 的核心扩散建模机制，并引入了 `LLaDA 2.0` 中的若干训练增强策略。为避免概念混淆，现将模块对应关系说明如下。
+
+### 一、LLaDA 1.0 核心机制（已实现）
+
+- 双向 Transformer Mask Predictor
+  - Attention 设置为 `is_causal=False`
+  - 全局上下文预测 masked token
+- `iid_t` Masking（Eq.3）
+  - 对每个样本采样 `t ~ Uniform(eps, 1-eps)`
+  - 对每个 token 独立进行 `Bernoulli(t)` mask
+  - 保证至少 mask 一个 token
+- `1/t` 加权 Masked Cross Entropy
+  - 仅在 masked token 上计算损失
+  - 使用 Eq.3 形式的 Monte Carlo 近似
+- Iterative Remasking 采样
+  - 每步预测所有 masked token
+  - 按置信度选择低置信 token 重新 mask
+  - 使用 `s/t` 比例对齐 forward 过程
+
+启用方式：
+
+```bash
+--mask-schedule iid_t
+--repeat-penalty-weight 0
+```
+
+此模式最接近 `LLaDA 1.0` 原始设定。
+
+### 二、LLaDA 2.0 训练增强（部分实现）
+
+当前版本集成了 `LLaDA 2.0` 中提出的若干训练稳定化与持续预训练策略：
+
+- WSD（Warmup-Stable-Decay）Mask Schedule
+  - 支持 mask ratio 的 warmup / stable / decay 三阶段
+  - 可选 block curriculum
+- Block Curriculum
+  - 逐步增大 block size 进行扩散训练
+  - 再缩回 block size 以兼顾效率
+- Time-Weighted Loss
+  - 使用扩散时间权重 `alpha'(t)/(1-alpha(t))`
+  - 替代 `1/t` 近似形式
+- Document-level Attention Mask
+  - 基于 EOS 构建文档分段 attention
+  - 限制不同文档之间的 attention 传播
+
+启用示例：
+
+```bash
+--mask-schedule wsd
+--use-block-curriculum
+--time-weighted-loss
+--use-doc-attention-mask
+```
+
 ## 共用架构图（AR + LLaDA）
 
 ```mermaid
@@ -214,5 +270,7 @@ uv run python -m scripts.eval.eval_sft_one_prompt \
 
 ## References
 
+- LLaDA: https://arxiv.org/pdf/2502.09992
+- LLaDA 2.0: https://arxiv.org/abs/2512.15745
 - minimind: https://github.com/jingyaogong/minimind
 - tiny-diffusion: https://github.com/nathan-barry/tiny-diffusion
