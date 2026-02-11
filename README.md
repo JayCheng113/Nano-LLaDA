@@ -23,30 +23,30 @@ We reuse `minimind` for base model construction, dataset format, and tokenizer. 
 
 ```mermaid
 flowchart TD
-    A[Tokenizer / Input IDs] --> B[Token Embedding]
+    A[Tokenizer Input IDs] --> B[Token Embedding]
     B --> C[N x Transformer Block]
 
     subgraph C [Shared Transformer Backbone]
       C1[RMSNorm]
-      C2[Multi-Head Attention + RoPE]
+      C2[Multi Head Attention with RoPE]
       C3[Residual Add]
       C4[RMSNorm]
-      C5[SwiGLU MLP (gate_proj/up_proj/down_proj)]
+      C5[SwiGLU MLP gate up down projections]
       C6[Residual Add]
       C1 --> C2 --> C3 --> C4 --> C5 --> C6
     end
 
     C --> D[Final RMSNorm]
-    D --> E[LM Head (Linear to Vocab Logits)]
+    D --> E[LM Head Linear to Vocab Logits]
 
-    E --> F1[AR Branch (MiniMind)]
-    E --> F2[LLaDA Branch (Diffusion)]
+    E --> F1[AR Branch MiniMind]
+    E --> F2[LLaDA Branch Diffusion]
 
-    F1 --> G1[Causal Attention + Next-token CE Loss]
+    F1 --> G1[Causal Attention and Next Token CE Loss]
     F1 --> H1[Autoregressive Decoding]
 
-    F2 --> G2[Non-causal / Masked Denoising Loss]
-    F2 --> H2[Iterative Unmask Decoding (confidence/top-k/cap)]
+    F2 --> G2[Non Causal Masked Denoising Loss]
+    F2 --> H2[Iterative Unmask Decoding confidence topk cap]
 ```
 
 ## Environment Setup
