@@ -21,7 +21,7 @@ uv run train_pretrain.py \
   --num-attention-heads 8 \
   --max-seq-len 256 \
   --epochs 1 \
-  --batch-size 32
+  --batch-size 96
 
   eval AR
   uv run eval_minimind.py \
@@ -36,7 +36,7 @@ uv run diffusion.py \
   --train \
   --use-tokenizer \
   --tokenizer-dir . \
-  --data ./dataset/pretrain_en_wikipedia_3g.jsonl \
+  --data ./dataset/pretrain_hq.jsonl \
   --jsonl-field text \
   --seq-len 256 \
   --hidden-size 512 \
@@ -53,7 +53,7 @@ uv run diffusion.py \
   --iid-mask-eps 1e-3 \
   --weight-decay 0.1 \
   --repeat-penalty-weight 0 \
-  --init-from-minimind weights/minimind_pretrain_en_state_dict.pt \
+  --init-from-minimind weights/minimind_pretrain_state_dict.pt \
   --run-name diffusion_from_ar_eq3 \
   --early-stop-patience 5 \
   --early-stop-min-delta 0.001 \
@@ -83,7 +83,7 @@ uv run diffusion.py \
   llada SFT
 
   uv run python train_sft_diffusion.py \
-  --data dataset/sft_open_perfectblend_1g.jsonl \
+  --data dataset/sft_mini_512.jsonl \
   --tokenizer-dir . \
   --load-from weights/diffusion_from_ar_eq3_3g_en.pt \
   --run-name diffusion_sft \
