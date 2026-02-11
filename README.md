@@ -102,6 +102,18 @@ uv run eval_diffusion.py \
   --max-new-tokens 200
 ```
 
+## nano-llada 预训练 Loss（中文数据集）
+
+以下为 `nano-llada` 在中文数据集上进行 Diffusion 预训练的 loss 曲线结果：
+
+- 训练 `25k` steps：
+
+![nano-llada diffusion pretrain loss on Chinese dataset (25k steps)](./diffusion_from_ar_eq3_loss_cn_25k.png)
+
+- 训练 `40k` steps：
+
+![nano-llada diffusion pretrain loss on Chinese dataset (40k steps)](./diffusion_from_ar_eq3_loss_cn_40k.png)
+
 ### 5. AR SFT
 
 ```bash
