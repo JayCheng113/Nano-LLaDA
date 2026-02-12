@@ -196,17 +196,16 @@ def measure_diffusion_first_round_latency(
     masked = torch.zeros(1, block_size, dtype=torch.bool, device=device)
     masked[0, effective_prompt_len : effective_prompt_len + block_len] = True
     logits_cond = model(x)
-    logits_cond[..., mask_token_id] = -float("inf")
     if cfg_scale > 0 and effective_prompt_len > 0:
         x_uncond = x.clone()
         x_uncond[:, :effective_prompt_len] = mask_token_id
         logits_uncond = model(x_uncond)
-        logits_uncond[..., mask_token_id] = -float("inf")
         cond_log_probs = F.log_softmax(logits_cond, dim=-1)
         uncond_log_probs = F.log_softmax(logits_uncond, dim=-1)
         logits = (1.0 + cfg_scale) * cond_log_probs - cfg_scale * uncond_log_probs
     else:
         logits = logits_cond
+    logits[..., mask_token_id] = -float("inf")
     if repeat_penalty > 0:
         finalized = x[0][x[0] != mask_token_id]
         if repeat_window > 0:
