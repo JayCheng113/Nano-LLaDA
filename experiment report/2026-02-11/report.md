@@ -132,17 +132,19 @@ uv run python -m scripts.eval.eval_sft_hf_qa \
   --tokenizer-dir . \
   --minimind-checkpoint weights/minimind_sft_state_dict.pt \
   --diffusion-checkpoint weights/diffusion_sft_state_dict.pt \
-  --dataset cmrc2018 \
-  --split validation \
-  --question-field question \
-  --context-field context \
-  --answers-field answers \
-  --include-context \
-  --num-samples 50 \
+  --dataset BelleGroup/train_0.5M_CN \
+  --split train \
+  --question-field instruction \
+  --context-field input \
+  --answers-field output \
+  --num-samples 1 \
   --seed 42 \
-  --max-new-tokens 128 \
+  --max-new-tokens 96 \
   --seq-len 256 \
-  --output outputs/sft_cmrc2018_eval.jsonl
+  --gen-steps 64 \
+  --gen-cfg-scale 1.5 \
+  --output outputs/sft_belle_eval.jsonl
+
 
 
 ## Output
