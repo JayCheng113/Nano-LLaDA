@@ -14,6 +14,11 @@ from core.lm_dataset import PretrainDataset
 from core.model_minimind import MiniMindConfig, MiniMindForCausalLM
 from core.trainer_utils import auto_device, extract_state_dict
 
+try:
+    import matplotlib.pyplot as plt
+except ImportError:
+    plt = None
+
 SPECIAL_TOKENS = ["<|endoftext|>", "<|im_start|>", "<|im_end|>"]
 
 
@@ -173,6 +178,53 @@ def save_checkpoint(path, model, optimizer, step, epoch, args):
     torch.save(payload, path)
 
 
+def moving_average(values, window):
+    if window <= 1 or len(values) < window:
+        return []
+    smoothed = []
+    current_sum = sum(values[:window])
+    smoothed.append(current_sum / window)
+    for idx in range(window, len(values)):
+        current_sum += values[idx] - values[idx - window]
+        smoothed.append(current_sum / window)
+    return smoothed
+
+
+def save_loss_artifacts(save_dir, run_name, steps, losses):
+    if not steps:
+        print("No train loss records found, skip saving loss artifacts.")
+        return
+
+    os.makedirs(save_dir, exist_ok=True)
+    json_path = os.path.join(save_dir, f"{run_name}_train_loss.json")
+    payload = [{"step": int(step), "loss": float(loss)} for step, loss in zip(steps, losses)]
+    with open(json_path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False)
+    print(f"Saved train loss series: {json_path}")
+
+    if plt is None:
+        print("matplotlib is not installed, skip loss plotting.")
+        return
+
+    plot_path = os.path.join(save_dir, f"{run_name}_train_loss.png")
+    plt.figure(figsize=(10, 5))
+    plt.plot(steps, losses, label="train loss", linewidth=1.2, alpha=0.8)
+    window = min(100, max(5, len(losses) // 50))
+    smoothed = moving_average(losses, window)
+    if smoothed:
+        smooth_steps = steps[window - 1 :]
+        plt.plot(smooth_steps, smoothed, label=f"moving avg (window={window})", linewidth=2.0)
+    plt.xlabel("Update Step")
+    plt.ylabel("Loss")
+    plt.title("MiniMind Pretrain Loss")
+    plt.legend()
+    plt.grid(alpha=0.25)
+    plt.tight_layout()
+    plt.savefig(plot_path, dpi=160)
+    plt.close()
+    print(f"Saved train loss plot: {plot_path}")
+
+
 def main():
     args = parse_args()
     set_seed(args.seed)
@@ -280,6 +332,8 @@ def main():
 
     start_time = time.time()
     model.train()
+    train_loss_steps = []
+    train_loss_values = []
     for epoch in range(start_epoch, args.epochs):
         for step, batch in enumerate(loader, start=1):
             input_ids, labels, attention_mask = batch
@@ -304,6 +358,8 @@ def main():
                 optimizer.step()
 
             global_step += 1
+            train_loss_steps.append(global_step)
+            train_loss_values.append(float(loss.item()))
 
             if global_step % args.log_interval == 0:
                 elapsed = time.time() - start_time
@@ -319,6 +375,7 @@ def main():
 
     save_checkpoint(final_path, model, optimizer, global_step, args.epochs, args)
     torch.save(model.state_dict(), state_dict_path)
+    save_loss_artifacts(args.save_dir, args.run_name, train_loss_steps, train_loss_values)
     print(f"Saved final checkpoint: {final_path}")
     print(f"Saved state_dict for diffusion init: {state_dict_path}")
 
