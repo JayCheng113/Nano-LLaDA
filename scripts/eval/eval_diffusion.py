@@ -62,8 +62,8 @@ def parse_args():
     parser.add_argument(
         "--gen-cfg-scale",
         type=float,
-        default=0.0,
-        help="Unsupervised CFG strength w in Eq.(16); 0 disables CFG",
+        default=1.5,
+        help="Unsupervised CFG strength w in Eq.(16); 0 disables CFG (default enabled)",
     )
 
     parser.add_argument("--eval-data", type=str, default=None, help="Optional .jsonl/.txt")

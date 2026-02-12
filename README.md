@@ -41,7 +41,7 @@ The current `Nano-LLaDA` release implements the core diffusion modeling mechanis
   - Predict all masked tokens at each step
   - Remask lowest-confidence tokens each step
   - Use `s/t` ratio to align with the reverse process
-  - Optional unsupervised CFG in Eq.(16) via `--gen-cfg-scale`
+  - Optional unsupervised CFG in Eq.(16) via `--gen-cfg-scale` (default enabled)
 
 Enable with:
 
@@ -185,10 +185,10 @@ uv run python -m scripts.eval.eval_diffusion \
   --prompt "请介绍你自己。" \
   --max-new-tokens 200 \
   --gen-steps 64 \
-  --gen-cfg-scale 0.0
+  --gen-cfg-scale 1.5
 ```
 
-Set `--gen-cfg-scale > 0` (for example `1.5`) to enable Eq.(16) unsupervised CFG during inference.
+`--gen-cfg-scale` is enabled by default (`1.5`). Set it to `0` to disable CFG.
 
 ## Nano-LLaDA Pretraining Loss (Chinese Dataset)
 
@@ -239,7 +239,7 @@ uv run python -m scripts.eval.eval_sft_one_prompt \
   --seq-len 512 \
   --max-new-tokens 128 \
   --gen-steps 64 \
-  --gen-cfg-scale 0.0
+  --gen-cfg-scale 1.5
 ```
 
 Nano-LLaDA SFT:
@@ -251,7 +251,7 @@ uv run python -m scripts.eval.eval_sft_one_prompt \
   --seq-len 512 \
   --max-new-tokens 128 \
   --gen-steps 64 \
-  --gen-cfg-scale 0.0
+  --gen-cfg-scale 1.5
 ```
 
 AR + Nano-LLaDA comparison:
@@ -264,7 +264,20 @@ uv run python -m scripts.eval.eval_sft_one_prompt \
   --seq-len 512 \
   --max-new-tokens 128 \
   --gen-steps 64 \
-  --gen-cfg-scale 0.0
+  --gen-cfg-scale 1.5
+```
+
+CFG ON/OFF side-by-side comparison:
+```bash
+uv run python -m scripts.eval.compare_cfg \
+  --checkpoint weights/diffusion_sft_state_dict.pt \
+  --tokenizer-dir . \
+  --prompt "你好，请介绍你自己。" \
+  --seq-len 512 \
+  --max-new-tokens 128 \
+  --gen-steps 64 \
+  --cfg-off-scale 0.0 \
+  --cfg-on-scale 1.5
 ```
 
 ## Technical Report

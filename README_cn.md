@@ -39,7 +39,7 @@
   - 每步预测所有 masked token
   - 每步选择最低置信 token 重新 mask
   - 使用 `s/t` 比例对齐 reverse 过程
-  - 通过 `--gen-cfg-scale` 可选启用 Eq.(16) 无监督 CFG
+  - 通过 `--gen-cfg-scale` 可选启用 Eq.(16) 无监督 CFG（默认开启）
 
 启用方式：
 
@@ -183,10 +183,10 @@ uv run python -m scripts.eval.eval_diffusion \
   --prompt "请介绍你自己。" \
   --max-new-tokens 200 \
   --gen-steps 64 \
-  --gen-cfg-scale 0.0
+  --gen-cfg-scale 1.5
 ```
 
-将 `--gen-cfg-scale` 设置为大于 `0`（例如 `1.5`）即可在推理时启用 Eq.(16) 无监督 CFG。
+`--gen-cfg-scale` 默认开启（`1.5`）。将其设为 `0` 可关闭 CFG。
 
 ## Nano-LLaDA 预训练 Loss（中文数据集）
 
@@ -237,7 +237,7 @@ uv run python -m scripts.eval.eval_sft_one_prompt \
   --seq-len 512 \
   --max-new-tokens 128 \
   --gen-steps 64 \
-  --gen-cfg-scale 0.0
+  --gen-cfg-scale 1.5
 ```
 
 Nano-llada SFT:
@@ -249,7 +249,7 @@ uv run python -m scripts.eval.eval_sft_one_prompt \
   --seq-len 512 \
   --max-new-tokens 128 \
   --gen-steps 64 \
-  --gen-cfg-scale 0.0
+  --gen-cfg-scale 1.5
 ```
 
 AR + Nano-llada 对比:
@@ -262,7 +262,20 @@ uv run python -m scripts.eval.eval_sft_one_prompt \
   --seq-len 512 \
   --max-new-tokens 128 \
   --gen-steps 64 \
-  --gen-cfg-scale 0.0
+  --gen-cfg-scale 1.5
+```
+
+CFG 开关对比（同一提示词并排输出）：
+```bash
+uv run python -m scripts.eval.compare_cfg \
+  --checkpoint weights/diffusion_sft_state_dict.pt \
+  --tokenizer-dir . \
+  --prompt "你好，请介绍你自己。" \
+  --seq-len 512 \
+  --max-new-tokens 128 \
+  --gen-steps 64 \
+  --cfg-off-scale 0.0 \
+  --cfg-on-scale 1.5
 ```
 
 ## 技术报告
