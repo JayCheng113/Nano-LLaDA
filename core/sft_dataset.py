@@ -324,16 +324,23 @@ def collate_sft_ar(batch: Sequence[Dict], eos_token_id: int):
     return input_ids, labels, attention_mask, prompt_lengths
 
 
-def collate_sft_diffusion(batch: Sequence[Dict], eos_token_id: int):
+def collate_sft_diffusion(batch: Sequence[Dict], eos_token_id: int, quantize_block_size: int = 0):
     max_len = max(int(sample["input_ids"].numel()) for sample in batch)
+    if quantize_block_size and quantize_block_size > 0:
+        max_len = ((max_len + quantize_block_size - 1) // quantize_block_size) * quantize_block_size
     input_ids = []
     prompt_lengths = []
     answer_lengths = []
     seq_lengths = []
+    effective_seq_lengths = []
     for sample in batch:
         seq = sample["input_ids"].tolist()
         prompt_len = int(sample["prompt_len"])
         seq_len = len(seq)
+        effective_len = seq_len
+        if quantize_block_size and quantize_block_size > 0:
+            effective_len = ((seq_len + quantize_block_size - 1) // quantize_block_size) * quantize_block_size
+            effective_len = min(effective_len, max_len)
         pad_n = max_len - len(seq)
         seq = seq + [eos_token_id] * pad_n
 
@@ -341,10 +348,12 @@ def collate_sft_diffusion(batch: Sequence[Dict], eos_token_id: int):
         prompt_lengths.append(prompt_len)
         answer_lengths.append(max(seq_len - prompt_len, 1))
         seq_lengths.append(seq_len)
+        effective_seq_lengths.append(effective_len)
 
     return {
         "input_ids": torch.tensor(input_ids, dtype=torch.long),
         "prompt_lengths": torch.tensor(prompt_lengths, dtype=torch.long),
         "answer_lengths": torch.tensor(answer_lengths, dtype=torch.long),
         "seq_lengths": torch.tensor(seq_lengths, dtype=torch.long),
+        "effective_seq_lengths": torch.tensor(effective_seq_lengths, dtype=torch.long),
     }

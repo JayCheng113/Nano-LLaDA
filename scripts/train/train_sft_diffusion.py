@@ -215,12 +215,11 @@ def diffusion_time_weight_from_t(t, eps):
 def build_llada_block_diffusion_batch(
     input_ids,
     prompt_lengths,
-    seq_lengths,
+    effective_seq_lengths,
     mask_token_id,
     block_size,
     alpha_min,
     alpha_max,
-    quantize_effective_length=False,
 ):
     bsz, max_len = input_ids.shape
     if block_size <= 0:
@@ -229,17 +228,18 @@ def build_llada_block_diffusion_batch(
     base_noisy = input_ids.clone()
     sampled_mask = torch.zeros_like(input_ids, dtype=torch.bool)
     block_region_mask = torch.zeros_like(input_ids, dtype=torch.bool)
+    response_region_mask = torch.zeros_like(input_ids, dtype=torch.bool)
     t = torch.rand(bsz, device=input_ids.device) * (alpha_max - alpha_min) + alpha_min
 
     for b in range(bsz):
         prompt_len = int(prompt_lengths[b].item())
-        seq_len = int(seq_lengths[b].item())
+        seq_len = int(effective_seq_lengths[b].item())
         seq_len = max(min(seq_len, max_len), 0)
-        if quantize_effective_length:
-            seq_len = min(((seq_len + block_size - 1) // block_size) * block_size, max_len)
         response_len = max(seq_len - prompt_len, 0)
         if response_len <= 0:
             continue
+        response_region = (token_pos[b] >= prompt_len) & (token_pos[b] < seq_len)
+        response_region_mask[b] = response_region
 
         num_blocks = (response_len + block_size - 1) // block_size
         block_idx = int(torch.randint(num_blocks, (1,), device=input_ids.device).item())
@@ -257,7 +257,7 @@ def build_llada_block_diffusion_batch(
 
     noisy = base_noisy.clone()
     noisy[sampled_mask] = mask_token_id
-    return noisy, sampled_mask, t, base_noisy, block_region_mask
+    return noisy, sampled_mask, t, base_noisy, block_region_mask, response_region_mask
 
 
 def save_checkpoint(path, model, optimizer, scaler, epoch, global_step, args):
@@ -366,7 +366,12 @@ def main():
         dataset = SFTConversationDataset(args.data, tokenizer, max_length=args.max_seq_len)
         dataset_size_text = str(len(dataset))
         print(f"SFT dataset loaded, samples={len(dataset)}")
-    collate_fn = partial(collate_sft_diffusion, eos_token_id=tokenizer.eos_token_id)
+    collate_quant_block = args.llada2_block_size if args.llada2_quantize_effective_length else 0
+    collate_fn = partial(
+        collate_sft_diffusion,
+        eos_token_id=tokenizer.eos_token_id,
+        quantize_block_size=collate_quant_block,
+    )
     loader = DataLoader(
         dataset,
         batch_size=args.batch_size,
@@ -511,7 +516,7 @@ def main():
             input_ids = batch["input_ids"].to(device)
             prompt_lengths = batch["prompt_lengths"].to(device)
             answer_lengths = batch["answer_lengths"].to(device).float().clamp(min=1.0)
-            seq_lengths = batch["seq_lengths"].to(device)
+            effective_seq_lengths = batch["effective_seq_lengths"].to(device)
 
             lr = llada_sft_lr(
                 update_step,
@@ -525,15 +530,14 @@ def main():
                 group["lr"] = lr
 
             if args.llada2_enable_block_diffusion:
-                noisy_ids, masked_indices, t, base_noisy, block_region_mask = build_llada_block_diffusion_batch(
+                noisy_ids, masked_indices, t, base_noisy, block_region_mask, response_region_mask = build_llada_block_diffusion_batch(
                     input_ids=input_ids,
                     prompt_lengths=prompt_lengths,
-                    seq_lengths=seq_lengths,
+                    effective_seq_lengths=effective_seq_lengths,
                     mask_token_id=mask_token_id,
                     block_size=args.llada2_block_size,
                     alpha_min=args.llada2_alpha_min,
                     alpha_max=args.llada2_alpha_max,
-                    quantize_effective_length=args.llada2_quantize_effective_length,
                 )
             else:
                 noisy_ids, masked_indices, _, t = build_llada_masked_batch(
@@ -544,13 +548,14 @@ def main():
                 )
                 base_noisy = None
                 block_region_mask = None
+                response_region_mask = None
 
             train_input_ids = input_ids
             train_noisy_ids = noisy_ids
             train_masked_indices = masked_indices
             train_t = t
             if args.llada2_enable_block_diffusion and args.llada2_enable_complementary_masking:
-                complementary_mask = block_region_mask & (~masked_indices)
+                complementary_mask = response_region_mask & (~masked_indices)
                 complementary_noisy = base_noisy.clone()
                 complementary_noisy[complementary_mask] = mask_token_id
                 train_input_ids = torch.cat([input_ids, input_ids], dim=0)

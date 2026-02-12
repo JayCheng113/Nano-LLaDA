@@ -557,7 +557,9 @@ def merge_topk_checkpoints(records, output_path, device):
         raise FileNotFoundError("No top-k checkpoint files found on disk for merging")
 
     merged_fp32 = None
+    merge_counts = None
     dtypes = None
+    used_records = []
     for rec in valid_records:
         ckpt = torch.load(rec["path"], map_location=device)
         state = extract_checkpoint_state_dict(ckpt)
@@ -565,31 +567,35 @@ def merge_topk_checkpoints(records, output_path, device):
             continue
         if merged_fp32 is None:
             merged_fp32 = {k: v.detach().float().clone() for k, v in state.items()}
+            merge_counts = {k: 1 for k in state.keys()}
             dtypes = {k: v.dtype for k, v in state.items()}
+            used_records.append(rec)
             continue
         for k in merged_fp32:
             if k in state and state[k].shape == merged_fp32[k].shape:
                 merged_fp32[k].add_(state[k].detach().float())
+                merge_counts[k] += 1
+        used_records.append(rec)
 
     if merged_fp32 is None:
         raise ValueError("Failed to load any valid model_state_dict for top-k merge")
 
-    n = float(len(valid_records))
     merged_state = {}
     for k, v in merged_fp32.items():
-        avg = v / n
+        cnt = float(max(merge_counts.get(k, 1), 1))
+        avg = v / cnt
         target_dtype = dtypes[k] if dtypes and k in dtypes else avg.dtype
         merged_state[k] = avg.to(dtype=target_dtype)
 
     torch.save(
         {
             "model_state_dict": merged_state,
-            "topk_records": valid_records,
-            "merge_k": len(valid_records),
+            "topk_records": used_records,
+            "merge_k": len(used_records),
         },
         output_path,
     )
-    return valid_records
+    return used_records
 
 
 def parse_csv_float_list(value, expected_len=None, name="value"):
@@ -952,7 +958,11 @@ def sample_wsd_bdlm_batch(x, y, candidate_mask, block_len):
 
         # Eq.(1): x0,<k is clean prefix; xt,k is noised current block.
         # To prevent future-token leakage in bidirectional attention, hide >=k+1 blocks.
-        future_block = (token_pos[b] >= block_end) & candidate_mask[b]
+        if args.use_tokenizer and pad_token_id is not None:
+            valid_context = x[b] != pad_token_id
+        else:
+            valid_context = torch.ones(seq_len, dtype=torch.bool, device=x.device)
+        future_block = (token_pos[b] >= block_end) & valid_context
         future_mask[b] = future_block
 
         noise_prob = torch.clamp(1.0 - alpha[b], min=0.0, max=1.0)
