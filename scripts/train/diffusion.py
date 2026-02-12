@@ -210,25 +210,25 @@ def parse_args():
         "--wsd-min-mask-ratio",
         type=float,
         default=0.15,
-        help="WSD: minimum contiguous mask ratio in warm-up/decay",
+        help="DEPRECATED: mask-ratio WSD schedule is no longer used; kept only for backward compatibility",
     )
     parser.add_argument(
         "--wsd-max-mask-ratio",
         type=float,
         default=1.0,
-        help="WSD: maximum mask ratio in stable phase",
+        help="DEPRECATED: mask-ratio WSD schedule is no longer used; kept only for backward compatibility",
     )
     parser.add_argument(
         "--wsd-warmup-ratio",
         type=float,
         default=0.2,
-        help="WSD: warm-up phase ratio over total steps",
+        help="DEPRECATED: mask-ratio WSD schedule is no longer used; kept only for backward compatibility",
     )
     parser.add_argument(
         "--wsd-stable-ratio",
         type=float,
         default=0.6,
-        help="WSD: stable phase ratio over total steps",
+        help="DEPRECATED: mask-ratio WSD schedule is no longer used; kept only for backward compatibility",
     )
     parser.add_argument(
         "--use-block-curriculum",
@@ -331,6 +331,17 @@ def parse_args():
         type=float,
         default=0.1,
         help="AdamW weight decay",
+    )
+    parser.add_argument(
+        "--llada2-topk-merge",
+        action="store_true",
+        help="Enable LLaDA2.0-style top-k checkpoint merging (default off)",
+    )
+    parser.add_argument(
+        "--llada2-topk-merge-k",
+        type=int,
+        default=3,
+        help="Number of best checkpoints to average when --llada2-topk-merge is enabled",
     )
     return parser.parse_args()
 
@@ -510,6 +521,72 @@ def load_matching_state_dict(model, state_dict):
     return missing, unexpected, skipped_shape, skipped_missing, len(matched)
 
 
+def _normalize_topk_records(records):
+    normalized = []
+    if not isinstance(records, list):
+        return normalized
+    for item in records:
+        if not isinstance(item, dict):
+            continue
+        path = item.get("path")
+        val_loss = item.get("val_loss")
+        step = item.get("step")
+        if not isinstance(path, str):
+            continue
+        try:
+            val_loss = float(val_loss)
+            step = int(step)
+        except (TypeError, ValueError):
+            continue
+        normalized.append({"path": path, "val_loss": val_loss, "step": step})
+    normalized.sort(key=lambda x: x["val_loss"])
+    return normalized
+
+
+def merge_topk_checkpoints(records, output_path, device):
+    if not records:
+        raise ValueError("No top-k records to merge")
+
+    valid_records = [r for r in records if os.path.exists(r["path"])]
+    if not valid_records:
+        raise FileNotFoundError("No top-k checkpoint files found on disk for merging")
+
+    merged_fp32 = None
+    dtypes = None
+    for rec in valid_records:
+        ckpt = torch.load(rec["path"], map_location=device)
+        state = extract_checkpoint_state_dict(ckpt)
+        if not isinstance(state, dict):
+            continue
+        if merged_fp32 is None:
+            merged_fp32 = {k: v.detach().float().clone() for k, v in state.items()}
+            dtypes = {k: v.dtype for k, v in state.items()}
+            continue
+        for k in merged_fp32:
+            if k in state and state[k].shape == merged_fp32[k].shape:
+                merged_fp32[k].add_(state[k].detach().float())
+
+    if merged_fp32 is None:
+        raise ValueError("Failed to load any valid model_state_dict for top-k merge")
+
+    n = float(len(valid_records))
+    merged_state = {}
+    for k, v in merged_fp32.items():
+        avg = v / n
+        target_dtype = dtypes[k] if dtypes and k in dtypes else avg.dtype
+        merged_state[k] = avg.to(dtype=target_dtype)
+
+    torch.save(
+        {
+            "model_state_dict": merged_state,
+            "topk_records": valid_records,
+            "merge_k": len(valid_records),
+        },
+        output_path,
+    )
+    return valid_records
+
+
 def parse_csv_float_list(value, expected_len=None, name="value"):
     parts = [p.strip() for p in value.split(",") if p.strip()]
     vals = [float(p) for p in parts]
@@ -578,18 +655,6 @@ if args.repeat_penalty_delay_steps < 0:
     raise ValueError("--repeat-penalty-delay-steps must be >= 0")
 if args.repeat_penalty_warmup_steps < 0:
     raise ValueError("--repeat-penalty-warmup-steps must be >= 0")
-if not (0.0 < args.wsd_min_mask_ratio <= 1.0):
-    raise ValueError("--wsd-min-mask-ratio must be in (0, 1]")
-if not (0.0 < args.wsd_max_mask_ratio <= 1.0):
-    raise ValueError("--wsd-max-mask-ratio must be in (0, 1]")
-if args.wsd_min_mask_ratio > args.wsd_max_mask_ratio:
-    raise ValueError("--wsd-min-mask-ratio must be <= --wsd-max-mask-ratio")
-if not (0.0 <= args.wsd_warmup_ratio <= 1.0):
-    raise ValueError("--wsd-warmup-ratio must be in [0, 1]")
-if not (0.0 <= args.wsd_stable_ratio <= 1.0):
-    raise ValueError("--wsd-stable-ratio must be in [0, 1]")
-if args.wsd_warmup_ratio + args.wsd_stable_ratio > 1.0:
-    raise ValueError("--wsd-warmup-ratio + --wsd-stable-ratio must be <= 1")
 if args.iid_mask_eps <= 0 or args.iid_mask_eps >= 0.5:
     raise ValueError("--iid-mask-eps must be in (0, 0.5)")
 if not (0.0 <= args.variable_length_prob <= 1.0):
@@ -622,6 +687,8 @@ if args.early_stop_min_delta < 0:
     raise ValueError("--early-stop-min-delta must be >= 0")
 if args.weight_decay < 0:
     raise ValueError("--weight-decay must be >= 0")
+if args.llada2_topk_merge_k <= 0:
+    raise ValueError("--llada2-topk-merge-k must be > 0")
 phase_ratios = parse_csv_float_list(args.wsd_phase_ratios, expected_len=3, name="--wsd-phase-ratios")
 if any(r < 0 for r in phase_ratios):
     raise ValueError("--wsd-phase-ratios values must be >= 0")
@@ -655,6 +722,21 @@ if args.mask_schedule == "iid_t" and args.time_weighted_loss:
         "--time-weighted-loss will be ignored."
     )
     args.time_weighted_loss = False
+if args.mask_schedule == "wsd" and not args.time_weighted_loss:
+    print(
+        "Info: mask-schedule=wsd uses BDLM/MDLM diffusion-time weighting "
+        "alpha'(t)/(1-alpha(t)) regardless of --time-weighted-loss."
+    )
+if (
+    args.wsd_min_mask_ratio != 0.15
+    or args.wsd_max_mask_ratio != 1.0
+    or args.wsd_warmup_ratio != 0.2
+    or args.wsd_stable_ratio != 0.6
+):
+    print(
+        "Warning: --wsd-min-mask-ratio/--wsd-max-mask-ratio/--wsd-warmup-ratio/--wsd-stable-ratio "
+        "are deprecated and ignored. WSD now only controls block-size curriculum."
+    )
 rope_scaling = (
     {
         "original_max_position_embeddings": 2048,
@@ -785,46 +867,6 @@ def get_curriculum_block_size(step):
     return wsd_block_sizes_down[idx]
 
 
-def get_wsd_mask_ratio(step):
-    if step is None:
-        return args.wsd_max_mask_ratio
-
-    warmup_steps = int(max_iters * args.wsd_warmup_ratio)
-    stable_steps = int(max_iters * args.wsd_stable_ratio)
-    decay_steps = max(max_iters - warmup_steps - stable_steps, 0)
-    min_ratio = args.wsd_min_mask_ratio
-    max_ratio = args.wsd_max_mask_ratio
-
-    if warmup_steps > 0 and step < warmup_steps:
-        p = (step + 1) / warmup_steps
-        return min_ratio + (max_ratio - min_ratio) * p
-    if step < warmup_steps + stable_steps:
-        return max_ratio
-    if decay_steps <= 0:
-        return max_ratio
-
-    decay_idx = step - warmup_steps - stable_steps
-    p = min(max((decay_idx + 1) / decay_steps, 0.0), 1.0)
-    return max_ratio - (max_ratio - min_ratio) * p
-
-
-def sample_contiguous_block_mask(candidate_mask, mask_ratio):
-    bsz, seq_len = candidate_mask.size()
-    mask = torch.zeros_like(candidate_mask)
-    for b in range(bsz):
-        valid_pos = torch.nonzero(candidate_mask[b], as_tuple=False).view(-1)
-        if valid_pos.numel() == 0:
-            continue
-        span = max(1, int(round(valid_pos.numel() * mask_ratio)))
-        span = min(span, valid_pos.numel())
-        start = 0 if span == valid_pos.numel() else torch.randint(
-            0, valid_pos.numel() - span + 1, (1,)
-        ).item()
-        chosen = valid_pos[start : start + span]
-        mask[b, chosen] = True
-    return mask
-
-
 def sample_blockwise_mask(candidate_mask, mask_ratio, block_len):
     bsz, seq_len = candidate_mask.size()
     mask = torch.zeros_like(candidate_mask)
@@ -869,6 +911,53 @@ def sample_diffusion_time_weight(batch_size):
     denom = torch.clamp(1.0 - alpha, min=eps)
     weight = torch.clamp((-alpha_prime / denom), min=eps)
     return weight
+
+
+def diffusion_time_weight_from_t(t):
+    eps = args.time_weight_eps
+    alpha = torch.cos(0.5 * math.pi * t) ** 2
+    alpha_prime = -0.5 * math.pi * torch.sin(math.pi * t)
+    denom = torch.clamp(1.0 - alpha, min=eps)
+    weight = torch.clamp((-alpha_prime / denom), min=eps)
+    return weight
+
+
+def sample_wsd_bdlm_batch(x, y, candidate_mask, block_len):
+    bsz, seq_len = x.size()
+    mask = torch.zeros_like(candidate_mask)
+    t = torch.empty(bsz, device=x.device).uniform_(args.time_weight_eps, 1.0 - args.time_weight_eps)
+    alpha = torch.cos(0.5 * math.pi * t) ** 2
+
+    token_pos = torch.arange(seq_len, device=x.device).unsqueeze(0).expand(bsz, -1)
+    future_mask = torch.zeros_like(candidate_mask)
+    block_len = max(1, min(block_len, seq_len))
+
+    for b in range(bsz):
+        block_ranges = []
+        for start in range(0, seq_len, block_len):
+            end = min(start + block_len, seq_len)
+            if candidate_mask[b, start:end].any():
+                block_ranges.append((start, end))
+        if not block_ranges:
+            continue
+
+        chosen = int(torch.randint(len(block_ranges), (1,), device=x.device).item())
+        block_start, block_end = block_ranges[chosen]
+        current_block = (token_pos[b] >= block_start) & (token_pos[b] < block_end) & candidate_mask[b]
+
+        # Eq.(1): x0,<k is clean prefix; xt,k is noised current block.
+        # To prevent future-token leakage in bidirectional attention, hide >=k+1 blocks.
+        future_block = (token_pos[b] >= block_end) & candidate_mask[b]
+        future_mask[b] = future_block
+
+        noise_prob = torch.clamp(1.0 - alpha[b], min=0.0, max=1.0)
+        block_noise = (torch.rand(seq_len, device=x.device) < noise_prob) & current_block
+        block_noise = ensure_nonempty_mask(block_noise.unsqueeze(0), current_block.unsqueeze(0)).squeeze(0)
+        mask[b] = block_noise
+
+    x[future_mask] = mask_token_id
+    x[mask] = mask_token_id
+    return x, mask, t
 
 
 def build_doc_ids_from_tokens(x):
@@ -952,19 +1041,17 @@ def get_batch(split, step=None):
         candidate_mask = torch.ones_like(x, dtype=torch.bool)
 
     iid_t = None
+    wsd_t = None
     if args.mask_schedule == "iid_t":
         block_len = block_size
         mask, iid_t = sample_iid_t_mask(candidate_mask, args.iid_mask_eps)
         seq_lengths = candidate_mask.sum(dim=1).clamp(min=1)
     elif split == "train" and args.mask_schedule == "wsd":
-        mask_ratio = get_wsd_mask_ratio(step)
         if args.use_block_curriculum:
             block_len = get_curriculum_block_size(step)
-            mask = sample_blockwise_mask(candidate_mask, mask_ratio, block_len)
         else:
             block_len = block_size
-            mask = sample_contiguous_block_mask(candidate_mask, mask_ratio)
-        mask = ensure_nonempty_mask(mask, candidate_mask)
+        x, mask, wsd_t = sample_wsd_bdlm_batch(x, y, candidate_mask, block_len)
         seq_lengths = candidate_mask.sum(dim=1).clamp(min=1)
     else:
         block_len = block_size
@@ -974,12 +1061,15 @@ def get_batch(split, step=None):
         mask_probs = torch.rand(bsz, 1)
         mask = (torch.rand(bsz, seq_len) < mask_probs) & candidate_mask
         mask = ensure_nonempty_mask(mask, candidate_mask)
-    x[mask] = mask_token_id
+    if wsd_t is None:
+        x[mask] = mask_token_id
 
     doc_ids = build_doc_ids_from_tokens(y)
     attn_mask = build_doc_attention_mask(doc_ids)
     if args.mask_schedule == "iid_t":
         batch_time_weight = iid_inv_t_weight(iid_t, args.iid_mask_eps)
+    elif args.mask_schedule == "wsd" and wsd_t is not None:
+        batch_time_weight = diffusion_time_weight_from_t(wsd_t)
     elif args.time_weighted_loss:
         batch_time_weight = sample_diffusion_time_weight(x.size(0))
     else:
@@ -993,6 +1083,8 @@ def get_batch(split, step=None):
         batch_time_weight = batch_time_weight.to(device)
     if iid_t is not None:
         iid_t = iid_t.to(device)
+    if wsd_t is not None:
+        wsd_t = wsd_t.to(device)
     seq_lengths = seq_lengths.to(device)
     return x, y, mask, attn_mask, batch_time_weight, block_len, doc_ids, iid_t, seq_lengths
 
@@ -1493,6 +1585,15 @@ if __name__ == "__main__":
             else "weights/diffusion_best.pt"
         )
     )
+    topk_merge_path = (
+        os.path.join("weights", f"{args.run_name}_topk_merged.pt")
+        if args.run_name
+        else (
+            "weights/diffusion_tokenizer_topk_merged.pt"
+            if args.use_tokenizer
+            else "weights/diffusion_topk_merged.pt"
+        )
+    )
     weights_dir = os.path.dirname(weights_path)
     if weights_dir:
         os.makedirs(weights_dir, exist_ok=True)
@@ -1516,6 +1617,7 @@ if __name__ == "__main__":
     best_val_loss = float("inf")
     best_step = -1
     bad_eval_count = 0
+    topk_records = []
     checkpoint_loaded = False
     pretrained_init_loaded = False
 
@@ -1539,9 +1641,8 @@ if __name__ == "__main__":
         f"warmup_steps={args.repeat_penalty_warmup_steps}"
     )
     print(
-        f"WSD mask schedule: mode={args.mask_schedule}, min_ratio={args.wsd_min_mask_ratio}, "
-        f"max_ratio={args.wsd_max_mask_ratio}, warmup_ratio={args.wsd_warmup_ratio}, "
-        f"stable_ratio={args.wsd_stable_ratio}, iid_eps={args.iid_mask_eps}"
+        f"Mask schedule: mode={args.mask_schedule}, iid_eps={args.iid_mask_eps}. "
+        "WSD now only controls block-size curriculum; mask-ratio WSD is deprecated."
     )
     if args.use_block_curriculum:
         print(
@@ -1555,6 +1656,11 @@ if __name__ == "__main__":
     )
     if args.mask_schedule == "iid_t":
         print("Loss: Eq.3 Monte Carlo masked CE with per-sample inverse-t weighting (1/t).")
+    elif args.mask_schedule == "wsd":
+        print(
+            "Loss: BDLM/MDLM-style masked CE with diffusion time-weight "
+            "alpha'(t)/(1-alpha(t)); WSD block phases map to warmup/stable/decay."
+        )
     elif args.time_weighted_loss:
         print("Loss: masked CE with diffusion time-weight alpha'(t)/(1-alpha(t)).")
     else:
@@ -1569,6 +1675,10 @@ if __name__ == "__main__":
     print(
         f"Validation checkpointing: best_path={best_weights_path}, "
         f"early_stop_patience={args.early_stop_patience}, min_delta={args.early_stop_min_delta}"
+    )
+    print(
+        f"LLaDA2.0 top-k merge: enabled={args.llada2_topk_merge}, "
+        f"k={args.llada2_topk_merge_k}, out={topk_merge_path}"
     )
 
     if os.path.exists(weights_path):
@@ -1588,6 +1698,7 @@ if __name__ == "__main__":
             best_val_loss = float(ckpt.get("best_val_loss", best_val_loss))
             best_step = int(ckpt.get("best_step", best_step))
             bad_eval_count = int(ckpt.get("bad_eval_count", 0))
+            topk_records = _normalize_topk_records(ckpt.get("topk_records", []))
             if train_flag:
                 print(f"Resuming training from step {start_step}")
         else:
@@ -1666,9 +1777,6 @@ if __name__ == "__main__":
             # every once in a while evaluate the loss on train and val sets
             if step % eval_interval == 0 or step == max_iters - 1:
                 active_repeat_penalty = get_repeat_penalty_weight(step)
-                active_mask_ratio = (
-                    get_wsd_mask_ratio(step) if args.mask_schedule == "wsd" else float("nan")
-                )
                 phase, _ = get_curriculum_phase(step)
                 active_block = get_curriculum_block_size(step)
                 losses = estimate_loss(step)
@@ -1698,11 +1806,47 @@ if __name__ == "__main__":
                     )
                 else:
                     bad_eval_count += 1
+                if args.llada2_topk_merge:
+                    should_add_topk = len(topk_records) < args.llada2_topk_merge_k
+                    if not should_add_topk and topk_records:
+                        worst_loss = max(item["val_loss"] for item in topk_records)
+                        should_add_topk = current_val < worst_loss
+                    if should_add_topk:
+                        topk_path = os.path.join(
+                            os.path.dirname(topk_merge_path),
+                            f"{os.path.splitext(os.path.basename(topk_merge_path))[0]}_step{step}.pt",
+                        )
+                        torch.save(
+                            {
+                                "model_state_dict": m.state_dict(),
+                                "optimizer_state_dict": optimizer.state_dict(),
+                                "step": step,
+                                "val_loss": current_val,
+                                "args": vars(args),
+                            },
+                            topk_path,
+                        )
+                        topk_records.append(
+                            {"path": topk_path, "val_loss": float(current_val), "step": int(step)}
+                        )
+                        topk_records = sorted(topk_records, key=lambda x: x["val_loss"])
+                        if len(topk_records) > args.llada2_topk_merge_k:
+                            removed = topk_records.pop(-1)
+                            if os.path.exists(removed["path"]):
+                                os.remove(removed["path"])
+                        print(
+                            "Top-k candidates: "
+                            + ", ".join(
+                                [
+                                    f"step{r['step']}:{r['val_loss']:.4f}"
+                                    for r in topk_records
+                                ]
+                            )
+                        )
                 print(
                     f"step {step}: train loss {losses['train']:.4f},"
                     f"val loss {losses['val']:.4f}, lr {current_lr:.2e}, "
                     f"repeat_w {active_repeat_penalty:.4f}, "
-                    f"mask_r {active_mask_ratio:.3f}, "
                     f"phase {phase}, block {active_block}, "
                     f"best_val {best_val_loss:.4f}@{best_step}, "
                     f"time {time.time() - start:.2f} seconds"
@@ -1793,10 +1937,20 @@ if __name__ == "__main__":
                 "best_val_loss": best_val_loss,
                 "best_step": best_step,
                 "bad_eval_count": bad_eval_count,
+                "topk_records": topk_records,
                 "args": vars(args),
             },
             weights_path,
         )
+        if args.llada2_topk_merge and topk_records:
+            try:
+                merged_records = merge_topk_checkpoints(topk_records, topk_merge_path, device=device)
+                print(
+                    f"Merged top-{len(merged_records)} checkpoints to {topk_merge_path}: "
+                    + ", ".join([f"step{r['step']}:{r['val_loss']:.4f}" for r in merged_records])
+                )
+            except Exception as e:
+                print(f"Warning: top-k merge failed: {e}")
 
         # Save loss curve
         if args.run_name:

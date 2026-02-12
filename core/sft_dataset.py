@@ -329,18 +329,22 @@ def collate_sft_diffusion(batch: Sequence[Dict], eos_token_id: int):
     input_ids = []
     prompt_lengths = []
     answer_lengths = []
+    seq_lengths = []
     for sample in batch:
         seq = sample["input_ids"].tolist()
         prompt_len = int(sample["prompt_len"])
+        seq_len = len(seq)
         pad_n = max_len - len(seq)
         seq = seq + [eos_token_id] * pad_n
 
         input_ids.append(seq)
         prompt_lengths.append(prompt_len)
-        answer_lengths.append(max_len - prompt_len)
+        answer_lengths.append(max(seq_len - prompt_len, 1))
+        seq_lengths.append(seq_len)
 
     return {
         "input_ids": torch.tensor(input_ids, dtype=torch.long),
         "prompt_lengths": torch.tensor(prompt_lengths, dtype=torch.long),
         "answer_lengths": torch.tensor(answer_lengths, dtype=torch.long),
+        "seq_lengths": torch.tensor(seq_lengths, dtype=torch.long),
     }

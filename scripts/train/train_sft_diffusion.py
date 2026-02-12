@@ -1,5 +1,6 @@
 import argparse
 import json
+import math
 import os
 import time
 from contextlib import nullcontext
@@ -60,6 +61,40 @@ def parse_args():
     parser.add_argument("--save-interval", type=int, default=500)
     parser.add_argument("--mask-token", type=str, default="<|mask|>")
     parser.add_argument("--iid-mask-eps", type=float, default=1e-3, help="t ~ U(eps, 1)")
+    parser.add_argument(
+        "--llada2-enable-block-diffusion",
+        action="store_true",
+        help="Enable LLaDA2.0 Eq.(5)-style block diffusion SFT objective (default off, keeps 1.0-style iid_t)",
+    )
+    parser.add_argument(
+        "--llada2-block-size",
+        type=int,
+        default=32,
+        help="Block size LB for LLaDA2.0 block diffusion SFT when enabled",
+    )
+    parser.add_argument(
+        "--llada2-alpha-min",
+        type=float,
+        default=0.05,
+        help="Lower bound of mask ratio alpha in LLaDA2.0 block diffusion SFT",
+    )
+    parser.add_argument(
+        "--llada2-alpha-max",
+        type=float,
+        default=0.95,
+        help="Upper bound of mask ratio alpha in LLaDA2.0 block diffusion SFT",
+    )
+    parser.add_argument(
+        "--llada2-enable-cap",
+        action="store_true",
+        help="Enable CAP confidence auxiliary loss (default off, keeps 1.0 objective)",
+    )
+    parser.add_argument(
+        "--llada2-cap-lambda",
+        type=float,
+        default=0.1,
+        help="CAP auxiliary loss weight lambda in L = LSFT + lambda * Lconf",
+    )
 
     parser.add_argument("--hidden-size", type=int, default=512)
     parser.add_argument("--num-hidden-layers", type=int, default=8)
@@ -160,6 +195,55 @@ def build_llada_masked_batch(input_ids, prompt_lengths, mask_token_id, eps):
     return noisy, sampled_mask, response_mask, t
 
 
+def diffusion_time_weight_from_t(t, eps):
+    alpha = torch.cos(0.5 * math.pi * t) ** 2
+    alpha_prime = -0.5 * math.pi * torch.sin(math.pi * t)
+    denom = torch.clamp(1.0 - alpha, min=eps)
+    return torch.clamp((-alpha_prime / denom), min=eps)
+
+
+def build_llada_block_diffusion_batch(
+    input_ids,
+    prompt_lengths,
+    seq_lengths,
+    mask_token_id,
+    block_size,
+    alpha_min,
+    alpha_max,
+):
+    bsz, max_len = input_ids.shape
+    if block_size <= 0:
+        raise ValueError("block_size must be > 0")
+    token_pos = torch.arange(max_len, device=input_ids.device).unsqueeze(0).expand(bsz, -1)
+    noisy = input_ids.clone()
+    sampled_mask = torch.zeros_like(input_ids, dtype=torch.bool)
+    t = torch.rand(bsz, device=input_ids.device) * (alpha_max - alpha_min) + alpha_min
+
+    for b in range(bsz):
+        prompt_len = int(prompt_lengths[b].item())
+        seq_len = int(seq_lengths[b].item())
+        seq_len = max(min(seq_len, max_len), 0)
+        response_len = max(seq_len - prompt_len, 0)
+        if response_len <= 0:
+            continue
+
+        num_blocks = (response_len + block_size - 1) // block_size
+        block_idx = int(torch.randint(num_blocks, (1,), device=input_ids.device).item())
+        block_start = prompt_len + block_idx * block_size
+        block_end = min(block_start + block_size, seq_len)
+
+        current_block = (token_pos[b] >= block_start) & (token_pos[b] < block_end)
+        future_block = (token_pos[b] >= block_end) & (token_pos[b] < seq_len)
+        sampled = (torch.rand(max_len, device=input_ids.device) < t[b]) & current_block
+        sampled = ensure_nonempty_mask(sampled.unsqueeze(0), current_block.unsqueeze(0)).squeeze(0)
+
+        sampled_mask[b] = sampled
+        noisy[b, future_block] = mask_token_id
+
+    noisy[sampled_mask] = mask_token_id
+    return noisy, sampled_mask, t
+
+
 def save_checkpoint(path, model, optimizer, scaler, epoch, global_step, args):
     payload = {
         "model_state_dict": model.state_dict(),
@@ -230,6 +314,16 @@ def main():
         raise ValueError("--final-decay-ratio must be in (0, 1]")
     if not (0.0 < args.final_lr_ratio <= 1.0):
         raise ValueError("--final-lr-ratio must be in (0, 1]")
+    if args.llada2_block_size <= 0:
+        raise ValueError("--llada2-block-size must be > 0")
+    if not (0.0 < args.llada2_alpha_min < 1.0):
+        raise ValueError("--llada2-alpha-min must be in (0, 1)")
+    if not (0.0 < args.llada2_alpha_max < 1.0):
+        raise ValueError("--llada2-alpha-max must be in (0, 1)")
+    if args.llada2_alpha_min > args.llada2_alpha_max:
+        raise ValueError("--llada2-alpha-min must be <= --llada2-alpha-max")
+    if args.llada2_cap_lambda < 0.0:
+        raise ValueError("--llada2-cap-lambda must be >= 0")
 
     tokenizer = AutoTokenizer.from_pretrained(args.tokenizer_dir, use_fast=True)
     if tokenizer.pad_token_id is None:
@@ -361,6 +455,11 @@ def main():
         f"device={device}, samples={dataset_size_text}, batch_size={args.batch_size}, max_seq_len={args.max_seq_len}, "
         f"mask_token_id={mask_token_id}, updates={total_updates}"
     )
+    print(
+        f"LLaDA2.0 switches: block_diffusion={args.llada2_enable_block_diffusion}, "
+        f"LB={args.llada2_block_size}, alpha_band=[{args.llada2_alpha_min:.2f},{args.llada2_alpha_max:.2f}], "
+        f"CAP={args.llada2_enable_cap}, cap_lambda={args.llada2_cap_lambda}"
+    )
     if tqdm is None:
         print("tqdm not installed; fallback to plain logs.")
 
@@ -389,6 +488,7 @@ def main():
             input_ids = batch["input_ids"].to(device)
             prompt_lengths = batch["prompt_lengths"].to(device)
             answer_lengths = batch["answer_lengths"].to(device).float().clamp(min=1.0)
+            seq_lengths = batch["seq_lengths"].to(device)
 
             lr = llada_sft_lr(
                 update_step,
@@ -401,12 +501,23 @@ def main():
             for group in optimizer.param_groups:
                 group["lr"] = lr
 
-            noisy_ids, masked_indices, _, t = build_llada_masked_batch(
-                input_ids=input_ids,
-                prompt_lengths=prompt_lengths,
-                mask_token_id=mask_token_id,
-                eps=args.iid_mask_eps,
-            )
+            if args.llada2_enable_block_diffusion:
+                noisy_ids, masked_indices, t = build_llada_block_diffusion_batch(
+                    input_ids=input_ids,
+                    prompt_lengths=prompt_lengths,
+                    seq_lengths=seq_lengths,
+                    mask_token_id=mask_token_id,
+                    block_size=args.llada2_block_size,
+                    alpha_min=args.llada2_alpha_min,
+                    alpha_max=args.llada2_alpha_max,
+                )
+            else:
+                noisy_ids, masked_indices, _, t = build_llada_masked_batch(
+                    input_ids=input_ids,
+                    prompt_lengths=prompt_lengths,
+                    mask_token_id=mask_token_id,
+                    eps=args.iid_mask_eps,
+                )
 
             with autocast_ctx:
                 logits = model(noisy_ids)
@@ -417,8 +528,28 @@ def main():
                 ).view_as(input_ids)
 
                 masked_ce = ce * masked_indices.float()
-                per_sample = masked_ce.sum(dim=1) / (t * answer_lengths)
-                raw_loss = per_sample.mean()
+                if args.llada2_enable_block_diffusion:
+                    time_w = diffusion_time_weight_from_t(t, args.iid_mask_eps)
+                    weighted_mask = masked_indices.float() * time_w.unsqueeze(1)
+                    weighted_sum = (masked_ce * time_w.unsqueeze(1)).sum()
+                    weight_denom = torch.clamp(weighted_mask.sum(), min=1.0)
+                    lsft = weighted_sum / weight_denom
+                else:
+                    per_sample = masked_ce.sum(dim=1) / (t * answer_lengths)
+                    lsft = per_sample.mean()
+
+                lconf = logits.new_zeros(())
+                if args.llada2_enable_cap:
+                    with torch.no_grad():
+                        pred = torch.argmax(logits, dim=-1)
+                        correct_mask = (pred == input_ids) & masked_indices
+                    if correct_mask.any():
+                        log_probs = F.log_softmax(logits.float(), dim=-1)
+                        probs = log_probs.exp()
+                        entropy = -(probs * log_probs).sum(dim=-1)
+                        lconf = entropy[correct_mask].mean().to(logits.dtype)
+
+                raw_loss = lsft + args.llada2_cap_lambda * lconf
                 loss = raw_loss / args.accumulation_steps
 
             if scaler.is_enabled():
@@ -450,11 +581,14 @@ def main():
                     elapsed = time.time() - start_time
                     msg = (
                         f"epoch={epoch + 1}/{args.epochs} step={global_step} "
-                        f"loss={raw_loss.item():.4f} lr={lr:.8f} masked={masked_tokens} elapsed={elapsed:.1f}s"
+                        f"loss={raw_loss.item():.4f} lsft={lsft.item():.4f} "
+                        f"lconf={lconf.item():.4f} lr={lr:.8f} masked={masked_tokens} elapsed={elapsed:.1f}s"
                     )
                     if tqdm is not None:
                         epoch_iter.set_postfix(
                             loss=f"{raw_loss.item():.4f}",
+                            lsft=f"{lsft.item():.4f}",
+                            lconf=f"{lconf.item():.4f}",
                             lr=f"{lr:.2e}",
                             masked=masked_tokens,
                             step=global_step,

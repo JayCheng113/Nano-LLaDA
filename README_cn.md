@@ -55,9 +55,10 @@
 当前版本集成了 `LLaDA 2.0` 中提出的若干训练稳定化与持续预训练策略：
 本小节中部分能力目前尚未完成端到端系统测试。
 
-- WSD（Warmup-Stable-Decay）Mask Schedule
-  - 支持 mask ratio 的 warmup / stable / decay 三阶段
-  - 可选 block curriculum
+- WSD（Warmup-Stable-Decay）Block Schedule
+  - 当前仓库中的 WSD 仅表示 block size 的 warmup / stable / decay
+  - 为避免概念混淆，原 mask-ratio 的 WSD 调度已弃用
+  - 当启用 `--mask-schedule wsd` 时，训练损失采用 BDLM/MDLM 风格的 masked CE，并使用扩散时间权重 `alpha'(t)/(1-alpha(t))`
 - Block Curriculum
   - 逐步增大 block size 进行扩散训练
   - 再缩回 block size 以兼顾效率

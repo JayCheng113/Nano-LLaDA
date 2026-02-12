@@ -57,9 +57,10 @@ This mode is the closest to the original `LLaDA 1.0` setting.
 The current release includes several stabilization and continual pretraining strategies from `LLaDA 2.0`:
 Some items in this section are not fully tested in end-to-end training yet.
 
-- WSD (Warmup-Stable-Decay) Mask Schedule
-  - Supports warmup / stable / decay phases for mask ratio
-  - Optional block curriculum
+- WSD (Warmup-Stable-Decay) Block Schedule
+  - WSD in this repo now refers only to block-size warmup/stable/decay
+  - Old mask-ratio WSD schedule has been deprecated to avoid confusion
+  - When `--mask-schedule wsd` is enabled, training uses BDLM/MDLM-style masked CE with diffusion time weight `alpha'(t)/(1-alpha(t))`
 - Block Curriculum
   - Gradually increase block size during diffusion training
   - Then shrink block size back for efficiency
@@ -69,6 +70,15 @@ Some items in this section are not fully tested in end-to-end training yet.
 - Document-level Attention Mask
   - Builds document-segmented attention using EOS boundaries
   - Restricts attention propagation across documents
+- Eq.(5) Block Diffusion SFT (optional switch, default off)
+  - Block-wise masked denoising for SFT with prompt conditioning
+  - Keeps clean prefix blocks and denoises a sampled noisy block
+- CAP (Confidence-Aware Parallel) auxiliary loss (optional switch, default off)
+  - Adds confidence objective `L = LSFT + lambda * Lconf`
+  - Minimizes entropy on correctly predicted masked tokens
+- Top-k checkpoint merging (optional switch, default off)
+  - Tracks top-k validation checkpoints during diffusion pretraining
+  - Saves an averaged merged checkpoint at the end
 
 Example flags:
 
@@ -77,6 +87,18 @@ Example flags:
 --use-block-curriculum
 --time-weighted-loss
 --use-doc-attention-mask
+```
+
+Additional LLaDA 2.0 optional flags (all default OFF, so default behavior remains 1.0-like):
+
+```bash
+# diffusion pretraining
+--llada2-topk-merge --llada2-topk-merge-k 3
+
+# diffusion SFT
+--llada2-enable-block-diffusion --llada2-block-size 32
+--llada2-alpha-min 0.05 --llada2-alpha-max 0.95
+--llada2-enable-cap --llada2-cap-lambda 0.1
 ```
 
 ## Shared Architecture (AR + LLaDA)
@@ -175,6 +197,12 @@ uv run python -m scripts.train.diffusion \
   --batch-size 96
 ```
 
+LLaDA 2.0-style optional pretraining switch (default off):
+
+```bash
+--llada2-topk-merge --llada2-topk-merge-k 3
+```
+
 ### 4. Nano-LLaDA Evaluation
 
 ```bash
@@ -227,6 +255,25 @@ uv run python -m scripts.train.train_sft_diffusion \
   --max-seq-len 512 \
   --batch-size 96 \
   --epochs 3
+```
+
+LLaDA 2.0-style optional SFT switches (keep disabled if you want 1.0 behavior):
+
+```bash
+uv run python -m scripts.train.train_sft_diffusion \
+  --data dataset/sft_mini_512.jsonl \
+  --tokenizer-dir . \
+  --load-from weights/diffusion_from_ar_eq3_3g_en.pt \
+  --run-name diffusion_sft_llada2 \
+  --max-seq-len 512 \
+  --batch-size 96 \
+  --epochs 3 \
+  --llada2-enable-block-diffusion \
+  --llada2-block-size 32 \
+  --llada2-alpha-min 0.05 \
+  --llada2-alpha-max 0.95 \
+  --llada2-enable-cap \
+  --llada2-cap-lambda 0.1
 ```
 
 ### 7. Single-Prompt SFT Evaluation
