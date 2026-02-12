@@ -25,6 +25,11 @@ def parse_args():
     parser.add_argument("--gen-repeat-penalty", type=float, default=0.0)
     parser.add_argument("--gen-repeat-window", type=int, default=128)
     parser.add_argument("--mask-token", type=str, default="<|mask|>")
+    parser.add_argument(
+        "--no-chat-wrap",
+        action="store_true",
+        help="Disable automatic <|im_start|>user/.../<|im_start|>assistant wrapping",
+    )
     parser.add_argument("--device", type=str, default=None)
     return parser.parse_args()
 
@@ -98,7 +103,10 @@ def load_diffusion_model(checkpoint, tokenizer, mask_token, device):
 
 @torch.no_grad()
 def run_once(model, tokenizer, prompt, mask_token_id, device, args, cfg_scale):
-    prompt_ids = tokenizer(prompt, add_special_tokens=False).input_ids
+    wrapped_prompt = prompt
+    if not args.no_chat_wrap and "<|im_start|>" not in prompt:
+        wrapped_prompt = f"<|im_start|>user\n{prompt}<|im_end|>\n<|im_start|>assistant\n"
+    prompt_ids = tokenizer(wrapped_prompt, add_special_tokens=False).input_ids
     if tokenizer.bos_token_id is not None:
         prompt_ids = [tokenizer.bos_token_id] + prompt_ids
     return generate(
@@ -119,7 +127,7 @@ def run_once(model, tokenizer, prompt, mask_token_id, device, args, cfg_scale):
         max_decode_per_step=0,
         gen_steps=args.gen_steps,
         cfg_scale=cfg_scale,
-    )
+    ), wrapped_prompt
 
 
 def main():
@@ -135,11 +143,15 @@ def main():
         tokenizer.pad_token = tokenizer.eos_token
 
     model, mask_token_id = load_diffusion_model(args.checkpoint, tokenizer, args.mask_token, device)
-    out_no_cfg = run_once(model, tokenizer, args.prompt, mask_token_id, device, args, args.cfg_off_scale)
-    out_cfg = run_once(model, tokenizer, args.prompt, mask_token_id, device, args, args.cfg_on_scale)
+    out_no_cfg, wrapped_prompt = run_once(
+        model, tokenizer, args.prompt, mask_token_id, device, args, args.cfg_off_scale
+    )
+    out_cfg, _ = run_once(model, tokenizer, args.prompt, mask_token_id, device, args, args.cfg_on_scale)
 
     print("\n=== Prompt ===")
     print(args.prompt)
+    print("\n=== Prompt Used For Generation ===")
+    print(wrapped_prompt)
     print("\n=== Output (CFG OFF) ===")
     print(f"cfg_scale={args.cfg_off_scale}")
     print(out_no_cfg)

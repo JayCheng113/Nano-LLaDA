@@ -76,6 +76,32 @@ uv run python -m scripts.eval.eval_diffusion \
   --gen-cfg-scale 1.5
 ```
 
+### 5. AR SFT
+
+```bash
+uv run python -m scripts.train.train_sft_minimind \
+  --data dataset/sft_mini_512.jsonl \
+  --tokenizer-dir . \
+  --load-from weights/minimind_pretrain_state_dict.pt \
+  --run-name minimind_sft \
+  --max-seq-len 512 \
+  --batch-size 96 \
+  --epochs 2
+```
+
+### 6. Nano-LLaDA SFT
+
+```bash
+uv run python -m scripts.train.train_sft_diffusion \
+  --data dataset/sft_mini_512.jsonl \
+  --tokenizer-dir . \
+  --load-from weights/diffusion_from_ar_eq3_best.pt \
+  --run-name diffusion_sft \
+  --max-seq-len 512 \
+  --batch-size 96 \
+  --epochs 2
+```
+
 ## Output
 minimind_pretrain_state_dict.pt
 minimind_pretrain.pt
