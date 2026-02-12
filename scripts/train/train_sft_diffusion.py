@@ -95,6 +95,16 @@ def parse_args():
         default=0.1,
         help="CAP auxiliary loss weight lambda in L = LSFT + lambda * Lconf",
     )
+    parser.add_argument(
+        "--llada2-enable-complementary-masking",
+        action="store_true",
+        help="Enable LLaDA2.0 complementary masking in block diffusion SFT (default off)",
+    )
+    parser.add_argument(
+        "--llada2-quantize-effective-length",
+        action="store_true",
+        help="Quantize each sample effective length to nearest block multiple in block diffusion SFT (default off)",
+    )
 
     parser.add_argument("--hidden-size", type=int, default=512)
     parser.add_argument("--num-hidden-layers", type=int, default=8)
@@ -210,19 +220,23 @@ def build_llada_block_diffusion_batch(
     block_size,
     alpha_min,
     alpha_max,
+    quantize_effective_length=False,
 ):
     bsz, max_len = input_ids.shape
     if block_size <= 0:
         raise ValueError("block_size must be > 0")
     token_pos = torch.arange(max_len, device=input_ids.device).unsqueeze(0).expand(bsz, -1)
-    noisy = input_ids.clone()
+    base_noisy = input_ids.clone()
     sampled_mask = torch.zeros_like(input_ids, dtype=torch.bool)
+    block_region_mask = torch.zeros_like(input_ids, dtype=torch.bool)
     t = torch.rand(bsz, device=input_ids.device) * (alpha_max - alpha_min) + alpha_min
 
     for b in range(bsz):
         prompt_len = int(prompt_lengths[b].item())
         seq_len = int(seq_lengths[b].item())
         seq_len = max(min(seq_len, max_len), 0)
+        if quantize_effective_length:
+            seq_len = min(((seq_len + block_size - 1) // block_size) * block_size, max_len)
         response_len = max(seq_len - prompt_len, 0)
         if response_len <= 0:
             continue
@@ -237,11 +251,13 @@ def build_llada_block_diffusion_batch(
         sampled = (torch.rand(max_len, device=input_ids.device) < t[b]) & current_block
         sampled = ensure_nonempty_mask(sampled.unsqueeze(0), current_block.unsqueeze(0)).squeeze(0)
 
+        block_region_mask[b] = current_block
         sampled_mask[b] = sampled
-        noisy[b, future_block] = mask_token_id
+        base_noisy[b, future_block] = mask_token_id
 
+    noisy = base_noisy.clone()
     noisy[sampled_mask] = mask_token_id
-    return noisy, sampled_mask, t
+    return noisy, sampled_mask, t, base_noisy, block_region_mask
 
 
 def save_checkpoint(path, model, optimizer, scaler, epoch, global_step, args):
@@ -324,6 +340,11 @@ def main():
         raise ValueError("--llada2-alpha-min must be <= --llada2-alpha-max")
     if args.llada2_cap_lambda < 0.0:
         raise ValueError("--llada2-cap-lambda must be >= 0")
+    if args.llada2_enable_complementary_masking and not args.llada2_enable_block_diffusion:
+        print(
+            "Warning: --llada2-enable-complementary-masking requires block diffusion; "
+            "it will be ignored because --llada2-enable-block-diffusion is off."
+        )
 
     tokenizer = AutoTokenizer.from_pretrained(args.tokenizer_dir, use_fast=True)
     if tokenizer.pad_token_id is None:
@@ -458,7 +479,9 @@ def main():
     print(
         f"LLaDA2.0 switches: block_diffusion={args.llada2_enable_block_diffusion}, "
         f"LB={args.llada2_block_size}, alpha_band=[{args.llada2_alpha_min:.2f},{args.llada2_alpha_max:.2f}], "
-        f"CAP={args.llada2_enable_cap}, cap_lambda={args.llada2_cap_lambda}"
+        f"CAP={args.llada2_enable_cap}, cap_lambda={args.llada2_cap_lambda}, "
+        f"complementary={args.llada2_enable_complementary_masking}, "
+        f"quantize_len={args.llada2_quantize_effective_length}"
     )
     if tqdm is None:
         print("tqdm not installed; fallback to plain logs.")
@@ -502,7 +525,7 @@ def main():
                 group["lr"] = lr
 
             if args.llada2_enable_block_diffusion:
-                noisy_ids, masked_indices, t = build_llada_block_diffusion_batch(
+                noisy_ids, masked_indices, t, base_noisy, block_region_mask = build_llada_block_diffusion_batch(
                     input_ids=input_ids,
                     prompt_lengths=prompt_lengths,
                     seq_lengths=seq_lengths,
@@ -510,6 +533,7 @@ def main():
                     block_size=args.llada2_block_size,
                     alpha_min=args.llada2_alpha_min,
                     alpha_max=args.llada2_alpha_max,
+                    quantize_effective_length=args.llada2_quantize_effective_length,
                 )
             else:
                 noisy_ids, masked_indices, _, t = build_llada_masked_batch(
@@ -518,19 +542,34 @@ def main():
                     mask_token_id=mask_token_id,
                     eps=args.iid_mask_eps,
                 )
+                base_noisy = None
+                block_region_mask = None
+
+            train_input_ids = input_ids
+            train_noisy_ids = noisy_ids
+            train_masked_indices = masked_indices
+            train_t = t
+            if args.llada2_enable_block_diffusion and args.llada2_enable_complementary_masking:
+                complementary_mask = block_region_mask & (~masked_indices)
+                complementary_noisy = base_noisy.clone()
+                complementary_noisy[complementary_mask] = mask_token_id
+                train_input_ids = torch.cat([input_ids, input_ids], dim=0)
+                train_noisy_ids = torch.cat([noisy_ids, complementary_noisy], dim=0)
+                train_masked_indices = torch.cat([masked_indices, complementary_mask], dim=0)
+                train_t = torch.cat([t, t], dim=0)
 
             with autocast_ctx:
-                logits = model(noisy_ids)
+                logits = model(train_noisy_ids)
                 ce = F.cross_entropy(
                     logits.view(-1, logits.size(-1)),
-                    input_ids.view(-1),
+                    train_input_ids.view(-1),
                     reduction="none",
-                ).view_as(input_ids)
+                ).view_as(train_input_ids)
 
-                masked_ce = ce * masked_indices.float()
+                masked_ce = ce * train_masked_indices.float()
                 if args.llada2_enable_block_diffusion:
-                    time_w = diffusion_time_weight_from_t(t, args.iid_mask_eps)
-                    weighted_mask = masked_indices.float() * time_w.unsqueeze(1)
+                    time_w = diffusion_time_weight_from_t(train_t, args.iid_mask_eps)
+                    weighted_mask = train_masked_indices.float() * time_w.unsqueeze(1)
                     weighted_sum = (masked_ce * time_w.unsqueeze(1)).sum()
                     weight_denom = torch.clamp(weighted_mask.sum(), min=1.0)
                     lsft = weighted_sum / weight_denom
@@ -542,7 +581,7 @@ def main():
                 if args.llada2_enable_cap:
                     with torch.no_grad():
                         pred = torch.argmax(logits, dim=-1)
-                        correct_mask = (pred == input_ids) & masked_indices
+                        correct_mask = (pred == train_input_ids) & train_masked_indices
                     if correct_mask.any():
                         log_probs = F.log_softmax(logits.float(), dim=-1)
                         probs = log_probs.exp()
@@ -570,7 +609,7 @@ def main():
 
                 update_step += 1
                 global_step += 1
-                masked_tokens = int(masked_indices.sum().item())
+                masked_tokens = int(train_masked_indices.sum().item())
                 epoch_loss_sum += float(raw_loss.item())
                 epoch_masked_sum += masked_tokens
                 epoch_update_count += 1

@@ -99,6 +99,11 @@ Additional LLaDA 2.0 optional flags (all default OFF, so default behavior remain
 --llada2-enable-block-diffusion --llada2-block-size 32
 --llada2-alpha-min 0.05 --llada2-alpha-max 0.95
 --llada2-enable-cap --llada2-cap-lambda 0.1
+--llada2-enable-complementary-masking
+--llada2-quantize-effective-length
+
+# diffusion decoding/eval
+--llada2-enable-parallel-decoding
 ```
 
 ## Shared Architecture (AR + LLaDA)
@@ -216,6 +221,12 @@ uv run python -m scripts.eval.eval_diffusion \
   --gen-cfg-scale 1.5
 ```
 
+LLaDA 2.0-style optional decoding switch:
+
+```bash
+--llada2-enable-parallel-decoding
+```
+
 `--gen-cfg-scale` is enabled by default (`1.5`). Set it to `0` to disable CFG.
 Generation now auto-stops when `<|im_end|>` or `eos` is produced.
 
@@ -273,7 +284,9 @@ uv run python -m scripts.train.train_sft_diffusion \
   --llada2-alpha-min 0.05 \
   --llada2-alpha-max 0.95 \
   --llada2-enable-cap \
-  --llada2-cap-lambda 0.1
+  --llada2-cap-lambda 0.1 \
+  --llada2-enable-complementary-masking \
+  --llada2-quantize-effective-length
 ```
 
 ### 7. Single-Prompt SFT Evaluation

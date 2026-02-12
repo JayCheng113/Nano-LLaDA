@@ -37,19 +37,19 @@ def parse_args():
         "--gen-temp",
         type=float,
         default=0.8,
-        help="Legacy parameter; ignored by greedy s/t remask decoding",
+        help="Sampling temperature used in diffusion decoding",
     )
     parser.add_argument(
         "--gen-confidence-threshold",
         type=float,
         default=0.9,
-        help="Legacy parameter; ignored by s/t remask decoding",
+        help="Confidence threshold used by LLaDA2.0 CAP-style parallel decoding",
     )
     parser.add_argument(
         "--gen-top-k",
         type=int,
         default=8,
-        help="Legacy parameter; ignored by greedy s/t remask decoding",
+        help="Top-k filter for diffusion token selection",
     )
     parser.add_argument("--gen-repeat-penalty", type=float, default=0.0)
     parser.add_argument("--gen-repeat-window", type=int, default=128)
@@ -57,19 +57,24 @@ def parse_args():
         "--gen-cap-start-ratio",
         type=float,
         default=0.08,
-        help="Legacy parameter; ignored by s/t remask decoding",
+        help="Initial decode ratio per step for LLaDA2.0 CAP-style parallel decoding",
     )
     parser.add_argument(
         "--gen-cap-end-ratio",
         type=float,
         default=0.5,
-        help="Legacy parameter; ignored by s/t remask decoding",
+        help="Final decode ratio per step for LLaDA2.0 CAP-style parallel decoding",
     )
     parser.add_argument(
         "--gen-max-decode-per-step",
         type=int,
         default=32,
-        help="Legacy parameter; ignored by s/t remask decoding",
+        help="Hard cap on decoded tokens per step for LLaDA2.0 CAP-style parallel decoding (0 disables cap)",
+    )
+    parser.add_argument(
+        "--llada2-enable-parallel-decoding",
+        action="store_true",
+        help="Enable LLaDA2.0 CAP-style confidence-aware parallel decoding (default off keeps 1.0-style s/t remask)",
     )
     parser.add_argument("--gen-steps", type=int, default=64)
     parser.add_argument(
@@ -185,8 +190,17 @@ def measure_diffusion_first_round_latency(
     max_decode_per_step,
     gen_steps,
     cfg_scale,
+    llada2_enable_parallel_decoding,
 ):    
-    _ = (temp, confidence_threshold, top_k, cap_start_ratio, cap_end_ratio, max_decode_per_step)
+    _ = (
+        temp,
+        confidence_threshold,
+        top_k,
+        cap_start_ratio,
+        cap_end_ratio,
+        max_decode_per_step,
+        llada2_enable_parallel_decoding,
+    )
     effective_prompt_len = min(len(prompt_tokens), min(32, block_size // 2))
     _sync_if_cuda(device)
     start = time.perf_counter()
@@ -405,6 +419,7 @@ def main():
             max_decode_per_step=args.gen_max_decode_per_step,
             gen_steps=args.gen_steps,
             cfg_scale=args.gen_cfg_scale,
+            llada2_enable_parallel_decoding=args.llada2_enable_parallel_decoding,
         )
         _sync_if_cuda(device)
         diff_t0 = time.perf_counter()
@@ -426,6 +441,7 @@ def main():
             max_decode_per_step=args.gen_max_decode_per_step,
             gen_steps=args.gen_steps,
             cfg_scale=args.gen_cfg_scale,
+            llada2_enable_parallel_decoding=args.llada2_enable_parallel_decoding,
         )
         _sync_if_cuda(device)
         diff_total_time = time.perf_counter() - diff_t0

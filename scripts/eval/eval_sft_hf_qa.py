@@ -63,6 +63,11 @@ def parse_args():
     parser.add_argument("--gen-cap-start-ratio", type=float, default=0.08)
     parser.add_argument("--gen-cap-end-ratio", type=float, default=0.5)
     parser.add_argument("--gen-max-decode-per-step", type=int, default=32)
+    parser.add_argument(
+        "--llada2-enable-parallel-decoding",
+        action="store_true",
+        help="Enable LLaDA2.0 CAP-style confidence-aware parallel decoding (default off keeps 1.0-style s/t remask)",
+    )
     parser.add_argument("--gen-steps", type=int, default=64)
     parser.add_argument("--gen-cfg-scale", type=float, default=1.5)
     parser.add_argument("--mask-token", type=str, default="<|mask|>")
@@ -233,6 +238,7 @@ def main():
                 max_decode_per_step=args.gen_max_decode_per_step,
                 gen_steps=args.gen_steps,
                 cfg_scale=args.gen_cfg_scale,
+                llada2_enable_parallel_decoding=args.llada2_enable_parallel_decoding,
             )
             diff_answer = extract_assistant_answer_from_ids(diff_full, tokenizer, prompt_ids)
 

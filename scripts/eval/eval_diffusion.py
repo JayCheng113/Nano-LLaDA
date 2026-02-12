@@ -24,19 +24,19 @@ def parse_args():
         "--gen-temp",
         type=float,
         default=0.8,
-        help="Legacy parameter; ignored by greedy s/t remask decoding",
+        help="Sampling temperature used in diffusion decoding",
     )
     parser.add_argument(
         "--gen-confidence-threshold",
         type=float,
         default=0.9,
-        help="Legacy parameter; ignored by s/t remask decoding",
+        help="Confidence threshold used by LLaDA2.0 CAP-style parallel decoding",
     )
     parser.add_argument(
         "--gen-top-k",
         type=int,
         default=8,
-        help="Legacy parameter; ignored by greedy s/t remask decoding",
+        help="Top-k filter for diffusion token selection",
     )
     parser.add_argument("--gen-repeat-penalty", type=float, default=0.0)
     parser.add_argument("--gen-repeat-window", type=int, default=128)
@@ -44,19 +44,24 @@ def parse_args():
         "--gen-cap-start-ratio",
         type=float,
         default=0.08,
-        help="Legacy parameter; ignored by s/t remask decoding",
+        help="Initial decode ratio per step for LLaDA2.0 CAP-style parallel decoding",
     )
     parser.add_argument(
         "--gen-cap-end-ratio",
         type=float,
         default=0.5,
-        help="Legacy parameter; ignored by s/t remask decoding",
+        help="Final decode ratio per step for LLaDA2.0 CAP-style parallel decoding",
     )
     parser.add_argument(
         "--gen-max-decode-per-step",
         type=int,
         default=32,
-        help="Legacy parameter; ignored by s/t remask decoding",
+        help="Hard cap on decoded tokens per step for LLaDA2.0 CAP-style parallel decoding (0 disables cap)",
+    )
+    parser.add_argument(
+        "--llada2-enable-parallel-decoding",
+        action="store_true",
+        help="Enable LLaDA2.0 CAP-style confidence-aware parallel decoding (default off keeps 1.0-style s/t remask)",
     )
     parser.add_argument("--gen-steps", type=int, default=64)
     parser.add_argument(
@@ -464,8 +469,8 @@ def generate(
     max_decode_per_step,
     gen_steps,
     cfg_scale,
+    llada2_enable_parallel_decoding=False,
 ):
-    _ = (temp, confidence_threshold, top_k, cap_start_ratio, cap_end_ratio, max_decode_per_step)
     effective_prompt_len = min(len(prompt_tokens), max(block_size - 1, 1))
     all_tokens = prompt_tokens[:effective_prompt_len]
     stop_token_ids = set()
@@ -498,6 +503,7 @@ def generate(
             else:
                 logits = logits_cond
             logits[..., mask_token_id] = -float("inf")
+            logits = logits / max(temp, 1e-6)
 
             if repeat_penalty > 0:
                 finalized = x[0][x[0] != mask_token_id]
@@ -507,8 +513,14 @@ def generate(
                     counts = torch.bincount(finalized, minlength=model.vocab_size).to(logits.dtype)
                     logits = logits - repeat_penalty * counts.view(1, 1, -1)
 
-            probs = F.softmax(logits, dim=-1)
-            sampled_tokens = torch.argmax(logits, dim=-1)
+            logits_pick = logits
+            if top_k > 0:
+                k = min(top_k, logits.size(-1))
+                topv, topi = torch.topk(logits, k=k, dim=-1)
+                logits_pick = torch.full_like(logits, -float("inf"))
+                logits_pick.scatter_(-1, topi, topv)
+            probs = F.softmax(logits_pick, dim=-1)
+            sampled_tokens = torch.argmax(logits_pick, dim=-1)
             sampled_probs = torch.gather(probs, -1, sampled_tokens.unsqueeze(-1)).squeeze(-1)
 
             x_filled = torch.where(masked, sampled_tokens, x)
@@ -529,18 +541,57 @@ def generate(
                 x = x_filled
                 masked = torch.zeros_like(masked)
                 break
-            n_remask = int(round(n_masked * remask_ratio))
-            n_remask = min(max(n_remask, 0), n_masked)
-            if n_remask == 0:
-                x = x_filled
-                masked = torch.zeros_like(masked)
-                break
-
             conf_masked = conf[0, current_masked_idx]
-            remask_local = torch.topk(conf_masked, k=n_remask, largest=False).indices
-            remask_positions = current_masked_idx[remask_local]
-            next_masked = torch.zeros_like(masked)
-            next_masked[0, remask_positions] = True
+
+            if llada2_enable_parallel_decoding:
+                step_progress = float(step_idx + 1) / float(max(gen_steps, 1))
+                decode_ratio = cap_start_ratio + (cap_end_ratio - cap_start_ratio) * step_progress
+                decode_ratio = min(max(decode_ratio, 0.0), 1.0)
+                n_decode = int(math.ceil(n_masked * decode_ratio))
+                n_decode = min(max(n_decode, 1), n_masked)
+                if max_decode_per_step > 0:
+                    n_decode = min(n_decode, max_decode_per_step)
+
+                confident_local = torch.nonzero(
+                    conf_masked >= confidence_threshold, as_tuple=False
+                ).view(-1)
+                if confident_local.numel() >= n_decode:
+                    chosen_local = confident_local[
+                        torch.topk(conf_masked[confident_local], k=n_decode, largest=True).indices
+                    ]
+                else:
+                    base = confident_local
+                    remaining_need = n_decode - int(base.numel())
+                    if remaining_need > 0:
+                        rest_mask = torch.ones_like(conf_masked, dtype=torch.bool)
+                        rest_mask[base] = False
+                        rest_idx = torch.nonzero(rest_mask, as_tuple=False).view(-1)
+                        if rest_idx.numel() > 0:
+                            fill_n = min(remaining_need, int(rest_idx.numel()))
+                            fill_local = rest_idx[
+                                torch.topk(conf_masked[rest_idx], k=fill_n, largest=True).indices
+                            ]
+                            chosen_local = torch.cat([base, fill_local], dim=0)
+                        else:
+                            chosen_local = base
+                    else:
+                        chosen_local = base
+
+                next_masked = torch.ones_like(masked)
+                next_masked[0, ~masked[0]] = False
+                finalized_positions = current_masked_idx[chosen_local]
+                next_masked[0, finalized_positions] = False
+            else:
+                n_remask = int(round(n_masked * remask_ratio))
+                n_remask = min(max(n_remask, 0), n_masked)
+                if n_remask == 0:
+                    x = x_filled
+                    masked = torch.zeros_like(masked)
+                    break
+                remask_local = torch.topk(conf_masked, k=n_remask, largest=False).indices
+                remask_positions = current_masked_idx[remask_local]
+                next_masked = torch.zeros_like(masked)
+                next_masked[0, remask_positions] = True
 
             x = x_filled
             x[next_masked] = mask_token_id
@@ -705,6 +756,7 @@ def main():
         max_decode_per_step=args.gen_max_decode_per_step,
         gen_steps=args.gen_steps,
         cfg_scale=args.gen_cfg_scale,
+        llada2_enable_parallel_decoding=args.llada2_enable_parallel_decoding,
     )
     print("\n=== Generation Sample ===")
     print(out_text)

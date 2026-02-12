@@ -78,6 +78,23 @@
 --use-doc-attention-mask
 ```
 
+LLaDA 2.0 可选开关（默认都关闭，默认行为仍偏 1.0）：
+
+```bash
+# diffusion pretraining
+--llada2-topk-merge --llada2-topk-merge-k 3
+
+# diffusion SFT
+--llada2-enable-block-diffusion --llada2-block-size 32
+--llada2-alpha-min 0.05 --llada2-alpha-max 0.95
+--llada2-enable-cap --llada2-cap-lambda 0.1
+--llada2-enable-complementary-masking
+--llada2-quantize-effective-length
+
+# diffusion 推理/评测
+--llada2-enable-parallel-decoding
+```
+
 ## 共用架构图（AR + LLaDA）
 
 ```mermaid
@@ -226,6 +243,27 @@ uv run python -m scripts.train.train_sft_diffusion \
   --max-seq-len 512 \
   --batch-size 96 \
   --epochs 3
+```
+
+LLaDA 2.0 风格可选 SFT 开关（如果要保留 1.0 行为就不要加）：
+
+```bash
+uv run python -m scripts.train.train_sft_diffusion \
+  --data dataset/sft_mini_512.jsonl \
+  --tokenizer-dir . \
+  --load-from weights/diffusion_from_ar_eq3_3g_en.pt \
+  --run-name diffusion_sft_llada2 \
+  --max-seq-len 512 \
+  --batch-size 96 \
+  --epochs 3 \
+  --llada2-enable-block-diffusion \
+  --llada2-block-size 32 \
+  --llada2-alpha-min 0.05 \
+  --llada2-alpha-max 0.95 \
+  --llada2-enable-cap \
+  --llada2-cap-lambda 0.1 \
+  --llada2-enable-complementary-masking \
+  --llada2-quantize-effective-length
 ```
 
 ### 7. SFT 单样本评测
