@@ -20,14 +20,51 @@ def parse_args():
 
     parser.add_argument("--prompt", type=str, default="你好，请介绍一下你自己。")
     parser.add_argument("--max-new-tokens", type=int, default=160)
-    parser.add_argument("--gen-temp", type=float, default=0.8)
-    parser.add_argument("--gen-confidence-threshold", type=float, default=0.9)
-    parser.add_argument("--gen-top-k", type=int, default=8)
-    parser.add_argument("--gen-repeat-penalty", type=float, default=0.15)
+    parser.add_argument(
+        "--gen-temp",
+        type=float,
+        default=0.8,
+        help="Legacy parameter; ignored by greedy s/t remask decoding",
+    )
+    parser.add_argument(
+        "--gen-confidence-threshold",
+        type=float,
+        default=0.9,
+        help="Legacy parameter; ignored by s/t remask decoding",
+    )
+    parser.add_argument(
+        "--gen-top-k",
+        type=int,
+        default=8,
+        help="Legacy parameter; ignored by greedy s/t remask decoding",
+    )
+    parser.add_argument("--gen-repeat-penalty", type=float, default=0.0)
     parser.add_argument("--gen-repeat-window", type=int, default=128)
-    parser.add_argument("--gen-cap-start-ratio", type=float, default=0.08)
-    parser.add_argument("--gen-cap-end-ratio", type=float, default=0.5)
-    parser.add_argument("--gen-max-decode-per-step", type=int, default=32)
+    parser.add_argument(
+        "--gen-cap-start-ratio",
+        type=float,
+        default=0.08,
+        help="Legacy parameter; ignored by s/t remask decoding",
+    )
+    parser.add_argument(
+        "--gen-cap-end-ratio",
+        type=float,
+        default=0.5,
+        help="Legacy parameter; ignored by s/t remask decoding",
+    )
+    parser.add_argument(
+        "--gen-max-decode-per-step",
+        type=int,
+        default=32,
+        help="Legacy parameter; ignored by s/t remask decoding",
+    )
+    parser.add_argument("--gen-steps", type=int, default=64)
+    parser.add_argument(
+        "--gen-cfg-scale",
+        type=float,
+        default=0.0,
+        help="Unsupervised CFG strength w in Eq.(16); 0 disables CFG",
+    )
 
     parser.add_argument("--eval-data", type=str, default=None, help="Optional .jsonl/.txt")
     parser.add_argument("--jsonl-field", type=str, default="text")
@@ -425,22 +462,37 @@ def generate(
     cap_start_ratio,
     cap_end_ratio,
     max_decode_per_step,
+    gen_steps,
+    cfg_scale,
 ):
-    effective_prompt_len = min(len(prompt_tokens), min(32, block_size // 2))
+    _ = (temp, confidence_threshold, top_k, cap_start_ratio, cap_end_ratio, max_decode_per_step)
+    effective_prompt_len = min(len(prompt_tokens), max(block_size - 1, 1))
     all_tokens = prompt_tokens[:effective_prompt_len]
 
     while len(all_tokens) - effective_prompt_len < max_new_tokens:
         block_len = min(block_size - effective_prompt_len, max_new_tokens - (len(all_tokens) - effective_prompt_len))
+        if block_len <= 0:
+            break
         x = torch.full((1, block_size), mask_token_id, dtype=torch.long, device=device)
         x[0, :effective_prompt_len] = torch.tensor(all_tokens[-effective_prompt_len:], device=device)
 
         masked = torch.zeros(1, block_size, dtype=torch.bool, device=device)
         masked[0, effective_prompt_len : effective_prompt_len + block_len] = True
-        initial_masked = int(masked.sum().item())
-
-        while masked.any():
-            logits = model(x)
-            logits[..., mask_token_id] = -float("inf")
+        for step_idx in range(gen_steps):
+            if not masked.any():
+                break
+            logits_cond = model(x)
+            logits_cond[..., mask_token_id] = -float("inf")
+            if cfg_scale > 0 and effective_prompt_len > 0:
+                x_uncond = x.clone()
+                x_uncond[:, :effective_prompt_len] = mask_token_id
+                logits_uncond = model(x_uncond)
+                logits_uncond[..., mask_token_id] = -float("inf")
+                cond_log_probs = F.log_softmax(logits_cond, dim=-1)
+                uncond_log_probs = F.log_softmax(logits_uncond, dim=-1)
+                logits = (1.0 + cfg_scale) * cond_log_probs - cfg_scale * uncond_log_probs
+            else:
+                logits = logits_cond
 
             if repeat_penalty > 0:
                 finalized = x[0][x[0] != mask_token_id]
@@ -450,39 +502,44 @@ def generate(
                     counts = torch.bincount(finalized, minlength=model.vocab_size).to(logits.dtype)
                     logits = logits - repeat_penalty * counts.view(1, 1, -1)
 
-            k = min(top_k, model.vocab_size)
-            probs = F.softmax(logits / temp, dim=-1)
-            top_k_probs, top_k_indices = torch.topk(probs, k=k, dim=-1)
-            confidences = top_k_probs.sum(dim=-1)
+            probs = F.softmax(logits, dim=-1)
+            sampled_tokens = torch.argmax(logits, dim=-1)
+            sampled_probs = torch.gather(probs, -1, sampled_tokens.unsqueeze(-1)).squeeze(-1)
 
-            remaining = int(masked.sum().item())
-            progress = 1.0 - (remaining / max(initial_masked, 1))
-            cap_ratio = cap_start_ratio + (cap_end_ratio - cap_start_ratio) * progress
-            cap_ratio = min(max(cap_ratio, min(cap_start_ratio, cap_end_ratio)), 1.0)
-            decode_budget = max(1, int(round(remaining * cap_ratio)))
-            if max_decode_per_step > 0:
-                decode_budget = min(decode_budget, max_decode_per_step)
+            x_filled = torch.where(masked, sampled_tokens, x)
+            conf = torch.where(masked, sampled_probs, torch.tensor(float("inf"), device=device))
 
-            decode_mask = (confidences >= confidence_threshold) & masked
-            decode_count = int(decode_mask.sum().item())
-            if decode_count == 0:
-                masked_conf = torch.where(masked, confidences, torch.tensor(-float("inf"), device=device)).view(-1)
-                decode_mask = torch.zeros_like(masked).view(-1)
-                decode_mask[masked_conf.argmax()] = True
-                decode_mask = decode_mask.view_as(masked)
-            elif decode_count > decode_budget:
-                candidate_conf = torch.where(decode_mask, confidences, torch.tensor(-float("inf"), device=device)).view(-1)
-                chosen = torch.topk(candidate_conf, k=decode_budget).indices
-                capped = torch.zeros_like(decode_mask).view(-1)
-                capped[chosen] = True
-                decode_mask = capped.view_as(decode_mask)
+            if step_idx == gen_steps - 1:
+                x = x_filled
+                masked = torch.zeros_like(masked)
+                break
 
-            top_k_probs_norm = top_k_probs / top_k_probs.sum(dim=-1, keepdim=True)
-            sampled_k = torch.multinomial(top_k_probs_norm.view(-1, k), 1).view(1, block_size)
-            sampled_tokens = torch.gather(top_k_indices, -1, sampled_k.unsqueeze(-1)).squeeze(-1)
+            t = 1.0 - (step_idx / gen_steps)
+            s = 1.0 - ((step_idx + 1) / gen_steps)
+            remask_ratio = s / max(t, 1e-8)
 
-            x = torch.where(decode_mask, sampled_tokens, x)
-            masked = masked & ~decode_mask
+            current_masked_idx = torch.nonzero(masked[0], as_tuple=False).view(-1)
+            n_masked = int(current_masked_idx.numel())
+            if n_masked <= 0:
+                x = x_filled
+                masked = torch.zeros_like(masked)
+                break
+            n_remask = int(round(n_masked * remask_ratio))
+            n_remask = min(max(n_remask, 0), n_masked)
+            if n_remask == 0:
+                x = x_filled
+                masked = torch.zeros_like(masked)
+                break
+
+            conf_masked = conf[0, current_masked_idx]
+            remask_local = torch.topk(conf_masked, k=n_remask, largest=False).indices
+            remask_positions = current_masked_idx[remask_local]
+            next_masked = torch.zeros_like(masked)
+            next_masked[0, remask_positions] = True
+
+            x = x_filled
+            x[next_masked] = mask_token_id
+            masked = next_masked
 
         all_tokens.extend(x[0, effective_prompt_len : effective_prompt_len + block_len].tolist())
 
@@ -527,6 +584,10 @@ def infer_hparams_from_state_dict(state_dict):
 
 def main():
     args = parse_args()
+    if args.gen_steps <= 0:
+        raise ValueError("--gen-steps must be > 0")
+    if args.gen_cfg_scale < 0:
+        raise ValueError("--gen-cfg-scale must be >= 0")
     device = auto_device(args.device)
 
     tokenizer = AutoTokenizer.from_pretrained(args.tokenizer_dir, use_fast=True)
@@ -627,6 +688,8 @@ def main():
         cap_start_ratio=args.gen_cap_start_ratio,
         cap_end_ratio=args.gen_cap_end_ratio,
         max_decode_per_step=args.gen_max_decode_per_step,
+        gen_steps=args.gen_steps,
+        cfg_scale=args.gen_cfg_scale,
     )
     print("\n=== Generation Sample ===")
     print(out_text)

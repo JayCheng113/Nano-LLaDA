@@ -37,8 +37,9 @@
   - 使用 Eq.3 形式的 Monte Carlo 近似
 - Iterative Remasking 采样
   - 每步预测所有 masked token
-  - 按置信度选择低置信 token 重新 mask
-  - 使用 `s/t` 比例对齐 forward 过程
+  - 每步选择最低置信 token 重新 mask
+  - 使用 `s/t` 比例对齐 reverse 过程
+  - 通过 `--gen-cfg-scale` 可选启用 Eq.(16) 无监督 CFG
 
 启用方式：
 
@@ -103,7 +104,7 @@ flowchart TD
     F1 --> H1[Autoregressive Decoding]
 
     F2 --> G2[Non Causal Masked Denoising Loss]
-    F2 --> H2[Iterative Unmask Decoding confidence topk cap]
+    F2 --> H2[Iterative Unmask Decoding s over t remask plus optional CFG]
 ```
 
 ## 环境准备
@@ -180,8 +181,12 @@ uv run python -m scripts.eval.eval_diffusion \
   --tokenizer-dir . \
   --seq-len 256 \
   --prompt "请介绍你自己。" \
-  --max-new-tokens 200
+  --max-new-tokens 200 \
+  --gen-steps 64 \
+  --gen-cfg-scale 0.0
 ```
+
+将 `--gen-cfg-scale` 设置为大于 `0`（例如 `1.5`）即可在推理时启用 Eq.(16) 无监督 CFG。
 
 ## Nano-LLaDA 预训练 Loss（中文数据集）
 
@@ -230,7 +235,9 @@ uv run python -m scripts.eval.eval_sft_one_prompt \
   --tokenizer-dir . \
   --minimind-checkpoint weights/minimind_sft_state_dict.pt \
   --seq-len 512 \
-  --max-new-tokens 128
+  --max-new-tokens 128 \
+  --gen-steps 64 \
+  --gen-cfg-scale 0.0
 ```
 
 Nano-llada SFT:
@@ -240,7 +247,9 @@ uv run python -m scripts.eval.eval_sft_one_prompt \
   --tokenizer-dir . \
   --diffusion-checkpoint weights/diffusion_sft_state_dict.pt \
   --seq-len 512 \
-  --max-new-tokens 128
+  --max-new-tokens 128 \
+  --gen-steps 64 \
+  --gen-cfg-scale 0.0
 ```
 
 AR + Nano-llada 对比:
@@ -251,7 +260,9 @@ uv run python -m scripts.eval.eval_sft_one_prompt \
   --minimind-checkpoint weights/minimind_sft_state_dict.pt \
   --diffusion-checkpoint weights/diffusion_sft_state_dict.pt \
   --seq-len 512 \
-  --max-new-tokens 128
+  --max-new-tokens 128 \
+  --gen-steps 64 \
+  --gen-cfg-scale 0.0
 ```
 
 ## 技术报告

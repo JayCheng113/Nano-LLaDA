@@ -33,14 +33,51 @@ def parse_args():
     parser.add_argument("--ar-temperature", type=float, default=0.8)
     parser.add_argument("--ar-top-k", type=int, default=20)
 
-    parser.add_argument("--gen-temp", type=float, default=0.8)
-    parser.add_argument("--gen-confidence-threshold", type=float, default=0.9)
-    parser.add_argument("--gen-top-k", type=int, default=8)
-    parser.add_argument("--gen-repeat-penalty", type=float, default=0.15)
+    parser.add_argument(
+        "--gen-temp",
+        type=float,
+        default=0.8,
+        help="Legacy parameter; ignored by greedy s/t remask decoding",
+    )
+    parser.add_argument(
+        "--gen-confidence-threshold",
+        type=float,
+        default=0.9,
+        help="Legacy parameter; ignored by s/t remask decoding",
+    )
+    parser.add_argument(
+        "--gen-top-k",
+        type=int,
+        default=8,
+        help="Legacy parameter; ignored by greedy s/t remask decoding",
+    )
+    parser.add_argument("--gen-repeat-penalty", type=float, default=0.0)
     parser.add_argument("--gen-repeat-window", type=int, default=128)
-    parser.add_argument("--gen-cap-start-ratio", type=float, default=0.08)
-    parser.add_argument("--gen-cap-end-ratio", type=float, default=0.5)
-    parser.add_argument("--gen-max-decode-per-step", type=int, default=32)
+    parser.add_argument(
+        "--gen-cap-start-ratio",
+        type=float,
+        default=0.08,
+        help="Legacy parameter; ignored by s/t remask decoding",
+    )
+    parser.add_argument(
+        "--gen-cap-end-ratio",
+        type=float,
+        default=0.5,
+        help="Legacy parameter; ignored by s/t remask decoding",
+    )
+    parser.add_argument(
+        "--gen-max-decode-per-step",
+        type=int,
+        default=32,
+        help="Legacy parameter; ignored by s/t remask decoding",
+    )
+    parser.add_argument("--gen-steps", type=int, default=64)
+    parser.add_argument(
+        "--gen-cfg-scale",
+        type=float,
+        default=0.0,
+        help="Unsupervised CFG strength w in Eq.(16); 0 disables CFG",
+    )
     parser.add_argument("--mask-token", type=str, default="<|mask|>")
     parser.add_argument(
         "--no-chat-wrap",
@@ -146,7 +183,10 @@ def measure_diffusion_first_round_latency(
     cap_start_ratio,
     cap_end_ratio,
     max_decode_per_step,
+    gen_steps,
+    cfg_scale,
 ):    
+    _ = (temp, confidence_threshold, top_k, cap_start_ratio, cap_end_ratio, max_decode_per_step)
     effective_prompt_len = min(len(prompt_tokens), min(32, block_size // 2))
     _sync_if_cuda(device)
     start = time.perf_counter()
@@ -155,10 +195,18 @@ def measure_diffusion_first_round_latency(
     x[0, :effective_prompt_len] = torch.tensor(prompt_tokens[-effective_prompt_len:], device=device)
     masked = torch.zeros(1, block_size, dtype=torch.bool, device=device)
     masked[0, effective_prompt_len : effective_prompt_len + block_len] = True
-    initial_masked = int(masked.sum().item())
-
-    logits = model(x)
-    logits[..., mask_token_id] = -float("inf")
+    logits_cond = model(x)
+    logits_cond[..., mask_token_id] = -float("inf")
+    if cfg_scale > 0 and effective_prompt_len > 0:
+        x_uncond = x.clone()
+        x_uncond[:, :effective_prompt_len] = mask_token_id
+        logits_uncond = model(x_uncond)
+        logits_uncond[..., mask_token_id] = -float("inf")
+        cond_log_probs = F.log_softmax(logits_cond, dim=-1)
+        uncond_log_probs = F.log_softmax(logits_uncond, dim=-1)
+        logits = (1.0 + cfg_scale) * cond_log_probs - cfg_scale * uncond_log_probs
+    else:
+        logits = logits_cond
     if repeat_penalty > 0:
         finalized = x[0][x[0] != mask_token_id]
         if repeat_window > 0:
@@ -167,29 +215,9 @@ def measure_diffusion_first_round_latency(
             counts = torch.bincount(finalized, minlength=model.vocab_size).to(logits.dtype)
             logits = logits - repeat_penalty * counts.view(1, 1, -1)
 
-    k = min(top_k, model.vocab_size)
-    probs = F.softmax(logits / temp, dim=-1)
-    top_k_probs, _ = torch.topk(probs, k=k, dim=-1)
-    confidences = top_k_probs.sum(dim=-1)
-    remaining = int(masked.sum().item())
-    progress = 1.0 - (remaining / max(initial_masked, 1))
-    cap_ratio = cap_start_ratio + (cap_end_ratio - cap_start_ratio) * progress
-    cap_ratio = min(max(cap_ratio, min(cap_start_ratio, cap_end_ratio)), 1.0)
-    decode_budget = max(1, int(round(remaining * cap_ratio)))
-    if max_decode_per_step > 0:
-        decode_budget = min(decode_budget, max_decode_per_step)
-    decode_mask = (confidences >= confidence_threshold) & masked
-    if int(decode_mask.sum().item()) == 0:
-        masked_conf = torch.where(masked, confidences, torch.tensor(-float("inf"), device=device)).view(-1)
-        decode_mask = torch.zeros_like(masked).view(-1)
-        decode_mask[masked_conf.argmax()] = True
-        decode_mask = decode_mask.view_as(masked)
-    elif int(decode_mask.sum().item()) > decode_budget:
-        candidate_conf = torch.where(decode_mask, confidences, torch.tensor(-float("inf"), device=device)).view(-1)
-        chosen = torch.topk(candidate_conf, k=decode_budget).indices
-        capped = torch.zeros_like(decode_mask).view(-1)
-        capped[chosen] = True
-        decode_mask = capped.view_as(decode_mask)
+    probs = F.softmax(logits, dim=-1)
+    _ = torch.argmax(logits, dim=-1)
+    _ = gen_steps
 
     _sync_if_cuda(device)
     return time.perf_counter() - start
@@ -302,6 +330,10 @@ def load_diffusion_model(checkpoint_path, tokenizer, mask_token, device):
 
 def main():
     args = parse_args()
+    if args.gen_steps <= 0:
+        raise ValueError("--gen-steps must be > 0")
+    if args.gen_cfg_scale < 0:
+        raise ValueError("--gen-cfg-scale must be >= 0")
     if not args.minimind_checkpoint and not args.diffusion_checkpoint:
         raise ValueError("Please provide at least one checkpoint: --minimind-checkpoint and/or --diffusion-checkpoint.")
 
@@ -372,6 +404,8 @@ def main():
             cap_start_ratio=args.gen_cap_start_ratio,
             cap_end_ratio=args.gen_cap_end_ratio,
             max_decode_per_step=args.gen_max_decode_per_step,
+            gen_steps=args.gen_steps,
+            cfg_scale=args.gen_cfg_scale,
         )
         _sync_if_cuda(device)
         diff_t0 = time.perf_counter()
@@ -391,6 +425,8 @@ def main():
             cap_start_ratio=args.gen_cap_start_ratio,
             cap_end_ratio=args.gen_cap_end_ratio,
             max_decode_per_step=args.gen_max_decode_per_step,
+            gen_steps=args.gen_steps,
+            cfg_scale=args.gen_cfg_scale,
         )
         _sync_if_cuda(device)
         diff_total_time = time.perf_counter() - diff_t0

@@ -266,18 +266,23 @@ def parse_args():
         action="store_true",
         help="Apply document-level attention mask in tokenizer mode",
     )
-    parser.add_argument("--gen-temp", type=float, default=0.8, help="Generation temperature")
+    parser.add_argument(
+        "--gen-temp",
+        type=float,
+        default=0.8,
+        help="Legacy parameter; ignored by greedy s/t remask decoding",
+    )
     parser.add_argument(
         "--gen-confidence-threshold",
         type=float,
         default=0.9,
-        help="Decode positions whose confidence exceeds this threshold",
+        help="Legacy parameter; ignored by s/t remask decoding",
     )
     parser.add_argument(
         "--gen-top-k",
         type=int,
         default=8,
-        help="Top-k sampling during generation",
+        help="Legacy parameter; ignored by greedy s/t remask decoding",
     )
     parser.add_argument(
         "--gen-steps",
@@ -288,7 +293,7 @@ def parse_args():
     parser.add_argument(
         "--gen-repeat-penalty",
         type=float,
-        default=0.15,
+        default=0.0,
         help="Inference-time logit penalty strength for repeated tokens (0 disables)",
     )
     parser.add_argument(
@@ -301,19 +306,25 @@ def parse_args():
         "--gen-cap-start-ratio",
         type=float,
         default=0.08,
-        help="CAP decoding budget ratio at early iterations",
+        help="Legacy parameter; ignored by s/t remask decoding",
     )
     parser.add_argument(
         "--gen-cap-end-ratio",
         type=float,
         default=0.5,
-        help="CAP decoding budget ratio at late iterations",
+        help="Legacy parameter; ignored by s/t remask decoding",
     )
     parser.add_argument(
         "--gen-max-decode-per-step",
         type=int,
         default=32,
-        help="Maximum number of positions to finalize per decoding step (<=0 means no cap)",
+        help="Legacy parameter; ignored by s/t remask decoding",
+    )
+    parser.add_argument(
+        "--gen-cfg-scale",
+        type=float,
+        default=0.0,
+        help="Unsupervised CFG strength w in Eq.(16); 0 disables CFG",
     )
     parser.add_argument(
         "--weight-decay",
@@ -603,6 +614,8 @@ if not (0.0 < args.gen_cap_end_ratio <= 1.0):
     raise ValueError("--gen-cap-end-ratio must be in (0, 1]")
 if args.gen_max_decode_per_step < 0:
     raise ValueError("--gen-max-decode-per-step must be >= 0")
+if args.gen_cfg_scale < 0:
+    raise ValueError("--gen-cfg-scale must be >= 0")
 if args.early_stop_patience < 0:
     raise ValueError("--early-stop-patience must be >= 0")
 if args.early_stop_min_delta < 0:
@@ -1326,12 +1339,13 @@ def generate(
     cap_end_ratio=0.5,
     max_decode_per_step=0,
     gen_steps=64,
+    cfg_scale=0.0,
 ):
     effective_prompt_len = min(prompt_len, len(prompt_tokens))
     all_tokens = prompt_tokens[:effective_prompt_len]
     total_steps = 0
 
-    _ = (confidence_threshold, cap_start_ratio, cap_end_ratio, max_decode_per_step)
+    _ = (temp, confidence_threshold, top_k, cap_start_ratio, cap_end_ratio, max_decode_per_step)
 
     # Generate in chunks to keep memory bounded.
     while len(all_tokens) - effective_prompt_len < max_new_tokens:
@@ -1347,8 +1361,18 @@ def generate(
             if not masked.any():
                 break
             total_steps += 1
-            logits, _ = model(x)
-            logits[..., mask_token_id] = -float("inf")
+            logits_cond, _ = model(x)
+            logits_cond[..., mask_token_id] = -float("inf")
+            if cfg_scale > 0 and effective_prompt_len > 0:
+                x_uncond = x.clone()
+                x_uncond[:, :effective_prompt_len] = mask_token_id
+                logits_uncond, _ = model(x_uncond)
+                logits_uncond[..., mask_token_id] = -float("inf")
+                cond_log_probs = F.log_softmax(logits_cond, dim=-1)
+                uncond_log_probs = F.log_softmax(logits_uncond, dim=-1)
+                logits = (1.0 + cfg_scale) * cond_log_probs - cfg_scale * uncond_log_probs
+            else:
+                logits = logits_cond
 
             if repeat_penalty > 0:
                 finalized = x[0][x[0] != mask_token_id]
@@ -1358,14 +1382,8 @@ def generate(
                     counts = torch.bincount(finalized, minlength=vocab_size).to(logits.dtype)
                     logits = logits - repeat_penalty * counts.view(1, 1, -1)
 
-            k = min(top_k, vocab_size)
-            probs = F.softmax(logits / temp, dim=-1)
-            top_k_probs, top_k_indices = torch.topk(probs, k=k, dim=-1)
-            top_k_probs_norm = top_k_probs / torch.clamp(
-                top_k_probs.sum(dim=-1, keepdim=True), min=1e-12
-            )
-            sampled_k = torch.multinomial(top_k_probs_norm.view(-1, k), 1).view(1, block_size)
-            sampled_tokens = torch.gather(top_k_indices, -1, sampled_k.unsqueeze(-1)).squeeze(-1)
+            probs = F.softmax(logits, dim=-1)
+            sampled_tokens = torch.argmax(logits, dim=-1)
             sampled_probs = torch.gather(probs, -1, sampled_tokens.unsqueeze(-1)).squeeze(-1)
 
             # Fill all currently masked tokens with current predictions.
@@ -1535,7 +1553,7 @@ if __name__ == "__main__":
     print(
         f"Generation (LLaDA-style remask): temp={args.gen_temp}, conf_thr={args.gen_confidence_threshold}, "
         f"top_k={args.gen_top_k}, rep_penalty={args.gen_repeat_penalty}, "
-        f"rep_window={args.gen_repeat_window}, gen_steps={args.gen_steps}, "
+        f"rep_window={args.gen_repeat_window}, gen_steps={args.gen_steps}, cfg_w={args.gen_cfg_scale}, "
         f"cap_start={args.gen_cap_start_ratio}, cap_end={args.gen_cap_end_ratio}, "
         f"max_decode_per_step={args.gen_max_decode_per_step}"
     )
@@ -1696,6 +1714,7 @@ if __name__ == "__main__":
                         cap_end_ratio=args.gen_cap_end_ratio,
                         max_decode_per_step=args.gen_max_decode_per_step,
                         gen_steps=args.gen_steps,
+                        cfg_scale=args.gen_cfg_scale,
                     )
                     print(f"Sample:\n{sample}\n")
                 if args.early_stop_patience > 0 and bad_eval_count >= args.early_stop_patience:
@@ -1807,6 +1826,7 @@ if __name__ == "__main__":
         cap_end_ratio=args.gen_cap_end_ratio,
         max_decode_per_step=args.gen_max_decode_per_step,
         gen_steps=args.gen_steps,
+        cfg_scale=args.gen_cfg_scale,
     )
     print(f"Total generation time: {time.time() - start:.2f} seconds")
     print(f"\nOutput:\n{output}")

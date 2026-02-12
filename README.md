@@ -39,8 +39,9 @@ The current `Nano-LLaDA` release implements the core diffusion modeling mechanis
   - Uses Eq.3-style Monte Carlo approximation
 - Iterative Remasking Sampling
   - Predict all masked tokens at each step
-  - Remask low-confidence tokens by confidence ranking
-  - Use `s/t` ratio to align with the forward process
+  - Remask lowest-confidence tokens each step
+  - Use `s/t` ratio to align with the reverse process
+  - Optional unsupervised CFG in Eq.(16) via `--gen-cfg-scale`
 
 Enable with:
 
@@ -105,7 +106,7 @@ flowchart TD
     F1 --> H1[Autoregressive Decoding]
 
     F2 --> G2[Non Causal Masked Denoising Loss]
-    F2 --> H2[Iterative Unmask Decoding confidence topk cap]
+    F2 --> H2[Iterative Unmask Decoding s over t remask plus optional CFG]
 ```
 
 ## Environment Setup
@@ -182,8 +183,12 @@ uv run python -m scripts.eval.eval_diffusion \
   --tokenizer-dir . \
   --seq-len 256 \
   --prompt "请介绍你自己。" \
-  --max-new-tokens 200
+  --max-new-tokens 200 \
+  --gen-steps 64 \
+  --gen-cfg-scale 0.0
 ```
+
+Set `--gen-cfg-scale > 0` (for example `1.5`) to enable Eq.(16) unsupervised CFG during inference.
 
 ## Nano-LLaDA Pretraining Loss (Chinese Dataset)
 
@@ -232,7 +237,9 @@ uv run python -m scripts.eval.eval_sft_one_prompt \
   --tokenizer-dir . \
   --minimind-checkpoint weights/minimind_sft_state_dict.pt \
   --seq-len 512 \
-  --max-new-tokens 128
+  --max-new-tokens 128 \
+  --gen-steps 64 \
+  --gen-cfg-scale 0.0
 ```
 
 Nano-LLaDA SFT:
@@ -242,7 +249,9 @@ uv run python -m scripts.eval.eval_sft_one_prompt \
   --tokenizer-dir . \
   --diffusion-checkpoint weights/diffusion_sft_state_dict.pt \
   --seq-len 512 \
-  --max-new-tokens 128
+  --max-new-tokens 128 \
+  --gen-steps 64 \
+  --gen-cfg-scale 0.0
 ```
 
 AR + Nano-LLaDA comparison:
@@ -253,7 +262,9 @@ uv run python -m scripts.eval.eval_sft_one_prompt \
   --minimind-checkpoint weights/minimind_sft_state_dict.pt \
   --diffusion-checkpoint weights/diffusion_sft_state_dict.pt \
   --seq-len 512 \
-  --max-new-tokens 128
+  --max-new-tokens 128 \
+  --gen-steps 64 \
+  --gen-cfg-scale 0.0
 ```
 
 ## Technical Report
