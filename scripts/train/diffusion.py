@@ -24,7 +24,7 @@ except ImportError:
 batch_size = 64  # how many independent sequences will we process in parallel?
 block_size = 256  # default context length (can be overridden by --seq-len)
 max_iters = 25000
-eval_interval = 10000
+eval_interval = 1000
 learning_rate = 3e-4
 device = (
     "cuda"
@@ -140,6 +140,12 @@ def parse_args():
         type=int,
         default=eval_interval,
         help="Run eval/sample logging every N steps",
+    )
+    parser.add_argument(
+        "--sample-interval",
+        type=int,
+        default=10000,
+        help="Generate text sample every N steps (0 disables periodic sampling)",
     )
     parser.add_argument(
         "--run-name",
@@ -538,10 +544,13 @@ rope_base = args.rope_theta
 max_position_embeddings = args.max_position_embeddings
 max_iters = args.max_iters
 eval_interval = args.eval_interval
+sample_interval = args.sample_interval
 if max_iters <= 0:
     raise ValueError("--max-iters must be > 0")
 if eval_interval <= 0:
     raise ValueError("--eval-interval must be > 0")
+if sample_interval < 0:
+    raise ValueError("--sample-interval must be >= 0")
 if learning_rate <= 0:
     raise ValueError("--learning-rate must be > 0")
 if warmup_steps < 0:
@@ -1671,21 +1680,24 @@ if __name__ == "__main__":
                     f"best_val {best_val_loss:.4f}@{best_step}, "
                     f"time {time.time() - start:.2f} seconds"
                 )
-                # Generate a sample
-                sample = generate(
-                    m,
-                    max_new_tokens=240,
-                    temp=args.gen_temp,
-                    confidence_threshold=args.gen_confidence_threshold,
-                    top_k=args.gen_top_k,
-                    repeat_penalty=args.gen_repeat_penalty,
-                    repeat_window=args.gen_repeat_window,
-                    cap_start_ratio=args.gen_cap_start_ratio,
-                    cap_end_ratio=args.gen_cap_end_ratio,
-                    max_decode_per_step=args.gen_max_decode_per_step,
-                    gen_steps=args.gen_steps,
+                should_generate_sample = (
+                    (sample_interval > 0 and step % sample_interval == 0) or step == max_iters - 1
                 )
-                print(f"Sample:\n{sample}\n")
+                if should_generate_sample:
+                    sample = generate(
+                        m,
+                        max_new_tokens=240,
+                        temp=args.gen_temp,
+                        confidence_threshold=args.gen_confidence_threshold,
+                        top_k=args.gen_top_k,
+                        repeat_penalty=args.gen_repeat_penalty,
+                        repeat_window=args.gen_repeat_window,
+                        cap_start_ratio=args.gen_cap_start_ratio,
+                        cap_end_ratio=args.gen_cap_end_ratio,
+                        max_decode_per_step=args.gen_max_decode_per_step,
+                        gen_steps=args.gen_steps,
+                    )
+                    print(f"Sample:\n{sample}\n")
                 if args.early_stop_patience > 0 and bad_eval_count >= args.early_stop_patience:
                     print(
                         f"Early stopping at step {step}: no val improvement for "
