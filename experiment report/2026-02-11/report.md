@@ -102,8 +102,36 @@ uv run python -m scripts.train.train_sft_diffusion \
   --epochs 2
 ```
 
+### 7. AR + Nano-LLaDA comparison:
+uv run python -m scripts.eval.eval_sft_one_prompt \
+  --prompt "你好，请介绍你自己。" \
+  --tokenizer-dir . \
+  --minimind-checkpoint weights/minimind_sft_state_dict.pt \
+  --diffusion-checkpoint weights/diffusion_sft_state_dict.pt \
+  --seq-len 512 \
+  --max-new-tokens 128 \
+  --gen-steps 64 \
+  --gen-cfg-scale 1.5
+
+### 8. CFG ON/OFF side-by-side comparison:
+uv run python -m scripts.eval.compare_cfg \
+--checkpoint weights/diffusion_sft_state_dict.pt \
+--tokenizer-dir . \
+--prompt "你好，请介绍你自己。" \
+--seq-len 512 \
+--max-new-tokens 128 \
+--gen-steps 64 \
+--cfg-off-scale 0.0 \
+--cfg-on-scale 1.5
+
 ## Output
 minimind_pretrain_state_dict.pt
 minimind_pretrain.pt
 diffusion_from_ar_eq3_best.pt
 diffusion_from_ar_eq3_loss.png
+minimind_sft_train_loss.png
+diffusion_sft_train_loss
+diffusion_sft.pt
+diffusion_sft_state_dict.pt
+minimind_sft.pt
+minimind_sft_state_dict.pt
