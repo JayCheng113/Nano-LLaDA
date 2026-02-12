@@ -98,7 +98,7 @@ def parse_args():
     parser.add_argument(
         "--llada2-enable-complementary-masking",
         action="store_true",
-        help="Enable LLaDA2.0 complementary masking in block diffusion SFT (default off)",
+        help="Enable LLaDA2.0 complementary masking (requires --llada2-enable-block-diffusion)",
     )
     parser.add_argument(
         "--llada2-quantize-effective-length",
@@ -340,11 +340,23 @@ def main():
         raise ValueError("--llada2-alpha-min must be <= --llada2-alpha-max")
     if args.llada2_cap_lambda < 0.0:
         raise ValueError("--llada2-cap-lambda must be >= 0")
+    if not args.llada2_enable_block_diffusion:
+        # LLaDA1.0-compatible SFT path: keep all LLaDA2.0 knobs disabled.
+        if args.llada2_enable_cap:
+            print("Warning: LLaDA1.0 SFT path disables --llada2-enable-cap.")
+            args.llada2_enable_cap = False
+        if args.llada2_enable_complementary_masking:
+            print("Warning: LLaDA1.0 SFT path disables --llada2-enable-complementary-masking.")
+            args.llada2_enable_complementary_masking = False
+        if args.llada2_quantize_effective_length:
+            print("Warning: LLaDA1.0 SFT path disables --llada2-quantize-effective-length.")
+            args.llada2_quantize_effective_length = False
     if args.llada2_enable_complementary_masking and not args.llada2_enable_block_diffusion:
         print(
-            "Warning: --llada2-enable-complementary-masking requires block diffusion; "
-            "it will be ignored because --llada2-enable-block-diffusion is off."
+            "Warning: --llada2-enable-complementary-masking is a LLaDA2.0 path and requires "
+            "--llada2-enable-block-diffusion. Disabling complementary masking."
         )
+        args.llada2_enable_complementary_masking = False
 
     tokenizer = AutoTokenizer.from_pretrained(args.tokenizer_dir, use_fast=True)
     if tokenizer.pad_token_id is None:
@@ -539,8 +551,9 @@ def main():
                     alpha_min=args.llada2_alpha_min,
                     alpha_max=args.llada2_alpha_max,
                 )
+                response_mask = response_region_mask
             else:
-                noisy_ids, masked_indices, _, t = build_llada_masked_batch(
+                noisy_ids, masked_indices, response_mask, t = build_llada_masked_batch(
                     input_ids=input_ids,
                     prompt_lengths=prompt_lengths,
                     mask_token_id=mask_token_id,
@@ -556,7 +569,7 @@ def main():
             train_t = t
             if args.llada2_enable_block_diffusion and args.llada2_enable_complementary_masking:
                 complementary_mask = response_region_mask & (~masked_indices)
-                complementary_noisy = base_noisy.clone()
+                complementary_noisy = input_ids.clone()
                 complementary_noisy[complementary_mask] = mask_token_id
                 train_input_ids = torch.cat([input_ids, input_ids], dim=0)
                 train_noisy_ids = torch.cat([noisy_ids, complementary_noisy], dim=0)

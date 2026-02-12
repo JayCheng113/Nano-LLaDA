@@ -733,6 +733,16 @@ if args.mask_schedule == "iid_t" and args.time_weighted_loss:
         "--time-weighted-loss will be ignored."
     )
     args.time_weighted_loss = False
+if args.mask_schedule == "iid_t":
+    if args.llada2_topk_merge:
+        print("Warning: mask-schedule=iid_t (LLaDA1.0 path) disables --llada2-topk-merge.")
+        args.llada2_topk_merge = False
+    if args.llada2_enable_parallel_decoding:
+        print(
+            "Warning: mask-schedule=iid_t (LLaDA1.0 path) disables "
+            "--llada2-enable-parallel-decoding."
+        )
+        args.llada2_enable_parallel_decoding = False
 if args.mask_schedule == "wsd" and not args.time_weighted_loss:
     print(
         "Info: mask-schedule=wsd uses BDLM/MDLM diffusion-time weighting "
@@ -933,7 +943,7 @@ def diffusion_time_weight_from_t(t):
     return weight
 
 
-def sample_wsd_bdlm_batch(x, y, candidate_mask, block_len):
+def sample_wsd_bdlm_batch(x, candidate_mask, block_len):
     bsz, seq_len = x.size()
     mask = torch.zeros_like(candidate_mask)
     t = torch.empty(bsz, device=x.device).uniform_(args.time_weight_eps, 1.0 - args.time_weight_eps)
@@ -971,6 +981,20 @@ def sample_wsd_bdlm_batch(x, y, candidate_mask, block_len):
         mask[b] = block_noise
 
     x[future_mask] = mask_token_id
+    x[mask] = mask_token_id
+    return x, mask, t
+
+
+def sample_wsd_mdlm_batch(x, candidate_mask):
+    bsz, seq_len = x.size()
+    t = torch.empty(bsz, device=x.device).uniform_(args.time_weight_eps, 1.0 - args.time_weight_eps)
+    alpha = torch.cos(0.5 * math.pi * t) ** 2
+    mask = torch.zeros_like(candidate_mask)
+    for b in range(bsz):
+        noise_prob = torch.clamp(1.0 - alpha[b], min=0.0, max=1.0)
+        sampled = (torch.rand(seq_len, device=x.device) < noise_prob) & candidate_mask[b]
+        sampled = ensure_nonempty_mask(sampled.unsqueeze(0), candidate_mask[b].unsqueeze(0)).squeeze(0)
+        mask[b] = sampled
     x[mask] = mask_token_id
     return x, mask, t
 
@@ -1062,11 +1086,17 @@ def get_batch(split, step=None):
         mask, iid_t = sample_iid_t_mask(candidate_mask, args.iid_mask_eps)
         seq_lengths = candidate_mask.sum(dim=1).clamp(min=1)
     elif split == "train" and args.mask_schedule == "wsd":
+        phase, _ = get_curriculum_phase(step)
         if args.use_block_curriculum:
             block_len = get_curriculum_block_size(step)
         else:
             block_len = block_size
-        x, mask, wsd_t = sample_wsd_bdlm_batch(x, y, candidate_mask, block_len)
+        if phase == "stable":
+            # Phase-2 MDLM objective (K=1 in WSD stable stage).
+            x, mask, wsd_t = sample_wsd_mdlm_batch(x, candidate_mask)
+        else:
+            # Phase-1/3 BDLM objective with blockwise conditioning.
+            x, mask, wsd_t = sample_wsd_bdlm_batch(x, candidate_mask, block_len)
         seq_lengths = candidate_mask.sum(dim=1).clamp(min=1)
     else:
         block_len = block_size

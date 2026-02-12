@@ -95,6 +95,9 @@ LLaDA 2.0 可选开关（默认都关闭，默认行为仍偏 1.0）：
 --llada2-enable-parallel-decoding
 ```
 
+安全保护：当使用 1.0 路径（预训练 `--mask-schedule iid_t`，或 SFT 未启用 `--llada2-enable-block-diffusion`）时，上述 2.0 开关会被自动关闭。
+说明：`--llada2-enable-complementary-masking` 作为 LLaDA2.0 路径，需与 `--llada2-enable-block-diffusion` 一起使用。
+
 ## 共用架构图（AR + LLaDA）
 
 ```mermaid

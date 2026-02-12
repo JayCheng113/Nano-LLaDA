@@ -106,6 +106,9 @@ Additional LLaDA 2.0 optional flags (all default OFF, so default behavior remain
 --llada2-enable-parallel-decoding
 ```
 
+Safety guard: when running 1.0-style paths (`--mask-schedule iid_t` in pretraining or SFT without `--llada2-enable-block-diffusion`), these 2.0 switches are automatically disabled.
+Note: `--llada2-enable-complementary-masking` is treated as a LLaDA2.0 path and requires `--llada2-enable-block-diffusion`.
+
 ## Shared Architecture (AR + LLaDA)
 
 ```mermaid
