@@ -78,20 +78,40 @@ def build_user_content(question, context, include_context):
     return question
 
 
+def render_chat_messages(messages):
+    chunks = []
+    for m in messages:
+        role = str(m.get("role", "")).strip()
+        if not role:
+            continue
+        content = m.get("content", "")
+        content = content if isinstance(content, str) else str(content)
+        chunks.append(f"<|im_start|>{role}\n{content}<|im_end|>\n")
+    return "".join(chunks)
+
+
 def build_chat_prompt_from_user(user_content):
-    return f"<|im_start|>user\n{user_content}<|im_end|>\n<|im_start|>assistant\n"
+    messages = [{"role": "user", "content": user_content}]
+    return render_chat_messages(messages) + "<|im_start|>assistant\n"
 
 
-def extract_assistant_answer(full_text, wrapped_prompt):
-    if full_text.startswith(wrapped_prompt):
-        answer = full_text[len(wrapped_prompt) :]
+def extract_assistant_answer_from_ids(full_text, tokenizer, prompt_ids):
+    full_ids = tokenizer(full_text, add_special_tokens=False).input_ids
+    answer_ids = []
+    if len(full_ids) >= len(prompt_ids) and full_ids[: len(prompt_ids)] == prompt_ids:
+        answer_ids = full_ids[len(prompt_ids) :]
+        answer = tokenizer.decode(answer_ids, skip_special_tokens=False)
     else:
-        answer = full_text
-    marker = "<|im_start|>assistant\n"
-    if marker in answer:
-        answer = answer.split(marker)[-1]
+        # Fallback for decode/encode mismatch: recover by assistant marker in text.
+        marker = "<|im_start|>assistant\n"
+        if marker in full_text:
+            answer = full_text.split(marker)[-1]
+        else:
+            answer = full_text
     if "<|im_end|>" in answer:
         answer = answer.split("<|im_end|>", 1)[0]
+    if "<|im_start|>" in answer:
+        answer = answer.split("<|im_start|>", 1)[0]
     return answer.strip()
 
 
@@ -166,6 +186,8 @@ def main():
             user_content = build_user_content(question, context, args.include_context)
             wrapped_prompt = build_chat_prompt_from_user(user_content)
 
+            ar_prompt_ids = tokenizer(wrapped_prompt, add_special_tokens=False).input_ids
+            ar_prompt_ids = maybe_prepend_bos_token_ids(ar_prompt_ids, tokenizer.bos_token_id)
             ar_full = ar_generate_text(
                 model=ar_model,
                 tokenizer=tokenizer,
@@ -175,7 +197,7 @@ def main():
                 temperature=args.ar_temperature,
                 top_k=args.ar_top_k,
             )
-            ar_answer = extract_assistant_answer(ar_full, wrapped_prompt)
+            ar_answer = extract_assistant_answer_from_ids(ar_full, tokenizer, ar_prompt_ids)
 
             prompt_ids = tokenizer(wrapped_prompt, add_special_tokens=False).input_ids
             prompt_ids = maybe_prepend_bos_token_ids(prompt_ids, tokenizer.bos_token_id)
@@ -198,7 +220,7 @@ def main():
                 gen_steps=args.gen_steps,
                 cfg_scale=args.gen_cfg_scale,
             )
-            diff_answer = extract_assistant_answer(diff_full, wrapped_prompt)
+            diff_answer = extract_assistant_answer_from_ids(diff_full, tokenizer, prompt_ids)
 
             rec = {
                 "idx": int(idx),
