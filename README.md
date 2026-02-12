@@ -6,6 +6,9 @@
 
 For the Chinese version of this document, see `README_cn.md`.
 
+## News
+We are continuously publishing updates on the `test` branch in the form of experimental reports, including implementation details and incremental progress. These changes will be merged into `main` at appropriate milestones. If you want the latest updates, please check the `test` branch.
+
 ## Project Status
 
 - Current version: `v0.1.0`
