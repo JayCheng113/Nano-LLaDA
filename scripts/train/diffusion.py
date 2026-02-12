@@ -24,7 +24,7 @@ except ImportError:
 batch_size = 64  # how many independent sequences will we process in parallel?
 block_size = 256  # default context length (can be overridden by --seq-len)
 max_iters = 25000
-eval_interval = 1000
+eval_interval = 10000
 learning_rate = 3e-4
 device = (
     "cuda"
@@ -134,6 +134,12 @@ def parse_args():
         type=int,
         default=max_iters,
         help="Total training steps target (supports resume)",
+    )
+    parser.add_argument(
+        "--eval-interval",
+        type=int,
+        default=eval_interval,
+        help="Run eval/sample logging every N steps",
     )
     parser.add_argument(
         "--run-name",
@@ -531,8 +537,11 @@ rms_norm_eps = args.rms_norm_eps
 rope_base = args.rope_theta
 max_position_embeddings = args.max_position_embeddings
 max_iters = args.max_iters
+eval_interval = args.eval_interval
 if max_iters <= 0:
     raise ValueError("--max-iters must be > 0")
+if eval_interval <= 0:
+    raise ValueError("--eval-interval must be > 0")
 if learning_rate <= 0:
     raise ValueError("--learning-rate must be > 0")
 if warmup_steps < 0:

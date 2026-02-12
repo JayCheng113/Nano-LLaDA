@@ -1,4 +1,5 @@
 import argparse
+import json
 import os
 import time
 from contextlib import nullcontext
@@ -16,6 +17,11 @@ try:
     from tqdm.auto import tqdm
 except ImportError:
     tqdm = None
+
+try:
+    import matplotlib.pyplot as plt
+except ImportError:
+    plt = None
 
 
 def parse_args():
@@ -91,6 +97,53 @@ def save_checkpoint(path, model, optimizer, scaler, epoch, global_step, args):
         "args": vars(args),
     }
     torch.save(payload, path)
+
+
+def moving_average(values, window):
+    if window <= 1 or len(values) < window:
+        return []
+    smoothed = []
+    current_sum = sum(values[:window])
+    smoothed.append(current_sum / window)
+    for idx in range(window, len(values)):
+        current_sum += values[idx] - values[idx - window]
+        smoothed.append(current_sum / window)
+    return smoothed
+
+
+def save_loss_artifacts(save_dir, run_name, steps, losses, log_fn):
+    if not steps:
+        log_fn("No train loss records found, skip saving loss artifacts.")
+        return
+
+    os.makedirs(save_dir, exist_ok=True)
+    json_path = os.path.join(save_dir, f"{run_name}_train_loss.json")
+    payload = [{"step": int(step), "loss": float(loss)} for step, loss in zip(steps, losses)]
+    with open(json_path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False)
+    log_fn(f"Saved train loss series: {json_path}")
+
+    if plt is None:
+        log_fn("matplotlib is not installed, skip loss plotting.")
+        return
+
+    plot_path = os.path.join(save_dir, f"{run_name}_train_loss.png")
+    plt.figure(figsize=(10, 5))
+    plt.plot(steps, losses, label="train total loss", linewidth=1.2, alpha=0.8)
+    window = min(100, max(5, len(losses) // 50))
+    smoothed = moving_average(losses, window)
+    if smoothed:
+        smooth_steps = steps[window - 1 :]
+        plt.plot(smooth_steps, smoothed, label=f"moving avg (window={window})", linewidth=2.0)
+    plt.xlabel("Update Step")
+    plt.ylabel("Loss")
+    plt.title("SFT Total Training Loss")
+    plt.legend()
+    plt.grid(alpha=0.25)
+    plt.tight_layout()
+    plt.savefig(plot_path, dpi=160)
+    plt.close()
+    log_fn(f"Saved train loss plot: {plot_path}")
 
 
 def main():
@@ -191,6 +244,8 @@ def main():
         print("tqdm not installed; fallback to plain logs.")
 
     model.train()
+    train_loss_steps = []
+    train_loss_values = []
     for epoch in range(start_epoch, args.epochs):
         epoch_start = time.time()
         epoch_loss_sum = 0.0
@@ -249,6 +304,8 @@ def main():
                 global_step += 1
                 epoch_loss_sum += float(raw_loss.item())
                 epoch_update_count += 1
+                train_loss_steps.append(global_step)
+                train_loss_values.append(float(raw_loss.item()))
 
                 if global_step % args.log_interval == 0:
                     elapsed = time.time() - start_time
@@ -274,6 +331,7 @@ def main():
 
     save_checkpoint(ckpt_path, model, optimizer, scaler, args.epochs, global_step, args)
     torch.save(model.state_dict(), sd_path)
+    save_loss_artifacts(args.save_dir, args.run_name, train_loss_steps, train_loss_values, print)
     print(f"Saved final checkpoint: {ckpt_path}")
     print(f"Saved state_dict: {sd_path}")
 
