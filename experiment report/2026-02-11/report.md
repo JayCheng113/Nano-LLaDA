@@ -153,9 +153,9 @@ minimind_pretrain.pt
 diffusion_from_ar_eq3_best.pt
 diffusion_from_ar_eq3_loss.png
 minimind_sft_train_loss.png
-diffusion_sft_train_loss
+diffusion_sft_train_loss.png
 diffusion_sft.pt
 diffusion_sft_state_dict.pt
 minimind_sft.pt
 minimind_sft_state_dict.pt
-sft_cmrc2018_eval.jsonl
+sft_belle_eval.jsonl
