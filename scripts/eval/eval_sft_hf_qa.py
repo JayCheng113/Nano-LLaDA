@@ -6,6 +6,11 @@ from pathlib import Path
 from datasets import load_dataset
 from transformers import AutoTokenizer
 
+try:
+    from tqdm.auto import tqdm
+except ImportError:
+    tqdm = None
+
 from core.trainer_utils import auto_device
 from scripts.eval.eval_diffusion import generate as diffusion_generate
 from scripts.eval.eval_sft_one_prompt import (
@@ -145,8 +150,12 @@ def main():
     out_path = Path(args.output)
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
+    iterator = picked
+    if tqdm is not None:
+        iterator = tqdm(picked, desc="Evaluating", unit="sample", dynamic_ncols=True)
+
     with out_path.open("w", encoding="utf-8") as f:
-        for rank, idx in enumerate(picked, start=1):
+        for rank, idx in enumerate(iterator, start=1):
             row = dataset[int(idx)]
             question = str(row.get(args.question_field, "")).strip()
             context = ""
@@ -200,7 +209,7 @@ def main():
                 "diffusion_answer": diff_answer,
             }
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
-            if rank % 10 == 0 or rank == len(picked):
+            if tqdm is None and (rank % 10 == 0 or rank == len(picked)):
                 print(f"done {rank}/{len(picked)}")
 
     print(f"saved: {out_path}")

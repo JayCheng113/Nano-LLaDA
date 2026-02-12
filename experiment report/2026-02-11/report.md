@@ -124,6 +124,27 @@ uv run python -m scripts.eval.compare_cfg \
 --cfg-off-scale 0.0 \
 --cfg-on-scale 1.5
 
+### 9. eval sft
+
+uv add datasets
+
+uv run python -m scripts.eval.eval_sft_hf_qa \
+  --tokenizer-dir . \
+  --minimind-checkpoint weights/minimind_sft_state_dict.pt \
+  --diffusion-checkpoint weights/diffusion_sft_state_dict.pt \
+  --dataset cmrc2018 \
+  --split validation \
+  --question-field question \
+  --context-field context \
+  --answers-field answers \
+  --include-context \
+  --num-samples 50 \
+  --seed 42 \
+  --max-new-tokens 128 \
+  --seq-len 256 \
+  --output outputs/sft_cmrc2018_eval.jsonl
+
+
 ## Output
 minimind_pretrain_state_dict.pt
 minimind_pretrain.pt
@@ -135,3 +156,4 @@ diffusion_sft.pt
 diffusion_sft_state_dict.pt
 minimind_sft.pt
 minimind_sft_state_dict.pt
+sft_cmrc2018_eval.jsonl
