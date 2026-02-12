@@ -115,6 +115,19 @@ def extract_assistant_answer_from_ids(full_text, tokenizer, prompt_ids):
     return answer.strip()
 
 
+def build_diffusion_prompt_ids(tokenizer, wrapped_prompt, seq_len):
+    prompt_ids = tokenizer(wrapped_prompt, add_special_tokens=False).input_ids
+    prompt_ids = maybe_prepend_bos_token_ids(prompt_ids, tokenizer.bos_token_id)
+    max_prompt_len = max(int(seq_len) - 1, 1)
+    truncated = 0
+    if len(prompt_ids) > max_prompt_len:
+        truncated = len(prompt_ids) - max_prompt_len
+        # Keep tail tokens to preserve the latest user turn and assistant prefix,
+        # aligned with SFT dataset truncation behavior.
+        prompt_ids = prompt_ids[-max_prompt_len:]
+    return prompt_ids, truncated
+
+
 def unpack_reference_answers(x):
     if isinstance(x, dict):
         texts = x.get("text")
@@ -199,8 +212,9 @@ def main():
             )
             ar_answer = extract_assistant_answer_from_ids(ar_full, tokenizer, ar_prompt_ids)
 
-            prompt_ids = tokenizer(wrapped_prompt, add_special_tokens=False).input_ids
-            prompt_ids = maybe_prepend_bos_token_ids(prompt_ids, tokenizer.bos_token_id)
+            prompt_ids, diff_prompt_truncated_tokens = build_diffusion_prompt_ids(
+                tokenizer, wrapped_prompt, args.seq_len
+            )
             diff_full = diffusion_generate(
                 model=diffusion_model,
                 tokenizer=tokenizer,
@@ -229,6 +243,7 @@ def main():
                 "references": references,
                 "ar_answer": ar_answer,
                 "diffusion_answer": diff_answer,
+                "diffusion_prompt_truncated_tokens": int(diff_prompt_truncated_tokens),
             }
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
             if tqdm is None and (rank % 10 == 0 or rank == len(picked)):
