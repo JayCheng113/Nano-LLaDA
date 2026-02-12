@@ -468,6 +468,12 @@ def generate(
     _ = (temp, confidence_threshold, top_k, cap_start_ratio, cap_end_ratio, max_decode_per_step)
     effective_prompt_len = min(len(prompt_tokens), max(block_size - 1, 1))
     all_tokens = prompt_tokens[:effective_prompt_len]
+    stop_token_ids = set()
+    if tokenizer.eos_token_id is not None:
+        stop_token_ids.add(int(tokenizer.eos_token_id))
+    vocab = tokenizer.get_vocab()
+    if "<|im_end|>" in vocab:
+        stop_token_ids.add(int(vocab["<|im_end|>"]))
 
     while len(all_tokens) - effective_prompt_len < max_new_tokens:
         block_len = min(block_size - effective_prompt_len, max_new_tokens - (len(all_tokens) - effective_prompt_len))
@@ -541,6 +547,16 @@ def generate(
             masked = next_masked
 
         all_tokens.extend(x[0, effective_prompt_len : effective_prompt_len + block_len].tolist())
+        if stop_token_ids:
+            generated_only = all_tokens[effective_prompt_len:]
+            stop_pos = -1
+            for idx, tid in enumerate(generated_only):
+                if tid in stop_token_ids:
+                    stop_pos = idx
+                    break
+            if stop_pos >= 0:
+                all_tokens = all_tokens[: effective_prompt_len + stop_pos + 1]
+                break
 
     return tokenizer.decode(all_tokens, skip_special_tokens=False)
 

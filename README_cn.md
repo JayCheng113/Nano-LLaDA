@@ -187,6 +187,7 @@ uv run python -m scripts.eval.eval_diffusion \
 ```
 
 `--gen-cfg-scale` 默认开启（`1.5`）。将其设为 `0` 可关闭 CFG。
+生成时若出现 `<|im_end|>` 或 `eos` 会自动停止。
 
 ## Nano-LLaDA 预训练 Loss（中文数据集）
 

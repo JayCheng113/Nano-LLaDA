@@ -189,6 +189,7 @@ uv run python -m scripts.eval.eval_diffusion \
 ```
 
 `--gen-cfg-scale` is enabled by default (`1.5`). Set it to `0` to disable CFG.
+Generation now auto-stops when `<|im_end|>` or `eos` is produced.
 
 ## Nano-LLaDA Pretraining Loss (Chinese Dataset)
 

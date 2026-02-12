@@ -1344,6 +1344,13 @@ def generate(
     effective_prompt_len = min(prompt_len, len(prompt_tokens))
     all_tokens = prompt_tokens[:effective_prompt_len]
     total_steps = 0
+    stop_token_ids = set()
+    if args.use_tokenizer:
+        if tokenizer.eos_token_id is not None:
+            stop_token_ids.add(int(tokenizer.eos_token_id))
+        vocab = tokenizer.get_vocab()
+        if "<|im_end|>" in vocab:
+            stop_token_ids.add(int(vocab["<|im_end|>"]))
 
     _ = (temp, confidence_threshold, top_k, cap_start_ratio, cap_end_ratio, max_decode_per_step)
 
@@ -1426,12 +1433,15 @@ def generate(
         all_tokens.extend(
             x[0, effective_prompt_len : effective_prompt_len + block_len].tolist()
         )
-
-        if args.use_tokenizer and tokenizer.eos_token_id is not None:
+        if stop_token_ids:
             generated_only = all_tokens[effective_prompt_len:]
-            if tokenizer.eos_token_id in generated_only:
-                first_eos = generated_only.index(tokenizer.eos_token_id)
-                all_tokens = all_tokens[: effective_prompt_len + first_eos + 1]
+            stop_pos = -1
+            for idx, tid in enumerate(generated_only):
+                if tid in stop_token_ids:
+                    stop_pos = idx
+                    break
+            if stop_pos >= 0:
+                all_tokens = all_tokens[: effective_prompt_len + stop_pos + 1]
                 break
 
     tokens_generated = len(all_tokens) - effective_prompt_len
