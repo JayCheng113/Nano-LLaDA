@@ -167,7 +167,7 @@ def parse_args():
     parser.add_argument(
         "--repeat-penalty-weight",
         type=float,
-        default=0.1,
+        default=0.0,
         help="Auxiliary unlikelihood loss weight for consecutive repeated target tokens",
     )
     parser.add_argument(
@@ -1085,7 +1085,7 @@ def get_batch(split, step=None):
         block_len = block_size
         mask, iid_t = sample_iid_t_mask(candidate_mask, args.iid_mask_eps)
         seq_lengths = candidate_mask.sum(dim=1).clamp(min=1)
-    elif split == "train" and args.mask_schedule == "wsd":
+    elif args.mask_schedule == "wsd":
         phase, _ = get_curriculum_phase(step)
         if args.use_block_curriculum:
             block_len = get_curriculum_block_size(step)
@@ -1101,7 +1101,7 @@ def get_batch(split, step=None):
     else:
         block_len = block_size
         seq_lengths = candidate_mask.sum(dim=1).clamp(min=1)
-        # Baseline random masking for eval or when explicitly requested.
+        # Baseline random masking for non-WSD schedules.
         bsz, seq_len = x.size()
         mask_probs = torch.rand(bsz, 1)
         mask = (torch.rand(bsz, seq_len) < mask_probs) & candidate_mask

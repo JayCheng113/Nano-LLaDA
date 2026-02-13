@@ -59,7 +59,7 @@ uv run python -m scripts.train.diffusion \
   --mask-schedule wsd \
   --use-block-curriculum \
   --wsd-phase-ratios 0.3,0.5,0.2 \
-  --wsd-block-sizes-up 1,16,64,128,256 \
+  --wsd-block-sizes-up 32,64,128,256 \
   --wsd-block-sizes-down 256,128,64,32 \
   --time-weighted-loss \
   --llada2-topk-merge \
@@ -69,7 +69,7 @@ uv run python -m scripts.train.diffusion \
   --run-name diffusion_llada2_pretrain
 ```
 
-## LLaDA2.0 style eval pretrain
+## LLaDA2.0 style eval on pretrain
 ```bash
 uv run python -m scripts.eval.eval_diffusion \
   --checkpoint weights/diffusion_llada2_pretrain.pt \
