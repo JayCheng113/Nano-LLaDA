@@ -113,7 +113,7 @@ uv run python -m scripts.train.train_sft_minimind \
 uv run python -m scripts.train.train_sft_diffusion \
   --data ./dataset/sft_mini_512.jsonl \
   --tokenizer-dir . \
-  --load-from weights/diffusion_llada2_pretrain_best.pt \
+  --load-from weights/diffusion_llada2_pretrain_topk_merged.pt \
   --run-name diffusion_llada2_sft \
   --max-seq-len 512 \
   --batch-size 96 \
@@ -163,3 +163,6 @@ uv run python -m scripts.eval.compare_llada_styles \
   --task sft \
   --prompt "你是谁？" \
   --output outputs/compare_sft.jsonl
+
+
+I found that LLaDA 2.0 style was better than 1.0 for pretraining.
