@@ -147,18 +147,21 @@ def _extract_ckpt_args(meta):
 def resolve_model_config(state_dict, meta):
     inferred = infer_hparams_from_state_dict(state_dict)
     ckpt_args = _extract_ckpt_args(meta)
+    def _pick(name, fallback):
+        value = ckpt_args.get(name, None)
+        return fallback if value is None else value
 
     model_cfg = {
         "vocab_size": inferred["vocab_size"],
-        "n_embd": int(ckpt_args.get("hidden_size", inferred["hidden_size"])),
-        "n_head": int(ckpt_args.get("num_attention_heads", inferred["num_attention_heads"])),
-        "n_layer": int(ckpt_args.get("num_hidden_layers", inferred["num_hidden_layers"])),
-        "intermediate_size": int(ckpt_args.get("intermediate_size", inferred["intermediate_size"])),
-        "dropout": float(ckpt_args.get("dropout", 0.0)),
-        "hidden_act": str(ckpt_args.get("hidden_act", "silu")),
-        "rms_norm_eps": float(ckpt_args.get("rms_norm_eps", 1e-5)),
-        "rope_base": float(ckpt_args.get("rope_theta", 1e6)),
-        "max_position_embeddings": int(ckpt_args.get("max_position_embeddings", 32768)),
+        "n_embd": int(_pick("hidden_size", inferred["hidden_size"])),
+        "n_head": int(_pick("num_attention_heads", inferred["num_attention_heads"])),
+        "n_layer": int(_pick("num_hidden_layers", inferred["num_hidden_layers"])),
+        "intermediate_size": int(_pick("intermediate_size", inferred["intermediate_size"])),
+        "dropout": float(_pick("dropout", 0.0)),
+        "hidden_act": str(_pick("hidden_act", "silu")),
+        "rms_norm_eps": float(_pick("rms_norm_eps", 1e-5)),
+        "rope_base": float(_pick("rope_theta", 1e6)),
+        "max_position_embeddings": int(_pick("max_position_embeddings", 32768)),
         "rope_scaling": None,
     }
 

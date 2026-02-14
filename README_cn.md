@@ -287,7 +287,7 @@ uv run python -m scripts.train.train_sft_diffusion \
 
 ```bash
 uv run python -m scripts.train.train_dpo_diffusion \
-  --data dataset/dpo_pairs.jsonl \
+  --data dataset/dpo.jsonl \
   --tokenizer-dir . \
   --load-from weights/diffusion_sft.pt \
   --run-name diffusion_dpo \
