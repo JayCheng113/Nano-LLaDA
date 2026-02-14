@@ -269,7 +269,42 @@ uv run python -m scripts.train.train_sft_diffusion \
   --llada2-quantize-effective-length
 ```
 
-### 7. SFT 单样本评测
+### 7. Nano-LLaDA DPO（独立于现有训练路径）
+
+基于 LLaDA 2.0 技术报告 5.3 节实现了 Diffusion DPO：将标准 DPO 中的条件对数似然替换为 Block Diffusion ELBO 的单样本 Monte Carlo 估计。
+实现入口为独立脚本：`scripts/train/train_dpo_diffusion.py`，不会改变已有预训练/SFT代码路径。
+
+偏好数据（`.jsonl`）支持以下格式之一：
+
+```json
+{"prompt":"...", "chosen":"...", "rejected":"..."}
+{"system":"...", "instruction":"...", "chosen":"...", "rejected":"..."}
+{"messages":[{"role":"user","content":"..."}], "chosen":"...", "rejected":"..."}
+{"chosen":[{"role":"user","content":"..."},{"role":"assistant","content":"..."}], "rejected":[{"role":"user","content":"..."},{"role":"assistant","content":"..."}]}
+```
+
+训练示例：
+
+```bash
+uv run python -m scripts.train.train_dpo_diffusion \
+  --data dataset/dpo_pairs.jsonl \
+  --tokenizer-dir . \
+  --load-from weights/diffusion_sft.pt \
+  --run-name diffusion_dpo \
+  --max-seq-len 512 \
+  --batch-size 64 \
+  --epochs 1 \
+  --dpo-beta 0.1 \
+  --llada2-block-size 32 \
+  --llada2-alpha-min 0.05 \
+  --llada2-alpha-max 0.95
+```
+
+说明：
+- `--reference-from` 默认等于 `--load-from`（即冻结的 SFT 模型作为参考模型）。
+- 若 `--learning-rate` 未设置，会优先从 SFT checkpoint 的参数推导最终学习率：`learning_rate * final_lr_ratio`。
+
+### 8. SFT 单样本评测
 
 AR SFT:
 ```bash

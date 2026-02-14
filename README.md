@@ -292,7 +292,42 @@ uv run python -m scripts.train.train_sft_diffusion \
   --llada2-quantize-effective-length
 ```
 
-### 7. Single-Prompt SFT Evaluation
+### 7. Nano-LLaDA DPO (Independent Feature)
+
+Following Section 5.3 of the LLaDA 2.0 report, diffusion DPO is implemented by replacing exact conditional log-likelihood with single-sample Block Diffusion ELBO estimates.
+The implementation is a separate entrypoint: `scripts/train/train_dpo_diffusion.py`, and does not change existing pretraining/SFT paths.
+
+Supported preference `.jsonl` row formats:
+
+```json
+{"prompt":"...", "chosen":"...", "rejected":"..."}
+{"system":"...", "instruction":"...", "chosen":"...", "rejected":"..."}
+{"messages":[{"role":"user","content":"..."}], "chosen":"...", "rejected":"..."}
+{"chosen":[{"role":"user","content":"..."},{"role":"assistant","content":"..."}], "rejected":[{"role":"user","content":"..."},{"role":"assistant","content":"..."}]}
+```
+
+Training example:
+
+```bash
+uv run python -m scripts.train.train_dpo_diffusion \
+  --data dataset/dpo_pairs.jsonl \
+  --tokenizer-dir . \
+  --load-from weights/diffusion_sft.pt \
+  --run-name diffusion_dpo \
+  --max-seq-len 512 \
+  --batch-size 64 \
+  --epochs 1 \
+  --dpo-beta 0.1 \
+  --llada2-block-size 32 \
+  --llada2-alpha-min 0.05 \
+  --llada2-alpha-max 0.95
+```
+
+Notes:
+- `--reference-from` defaults to `--load-from` (frozen post-SFT model as reference).
+- If `--learning-rate` is not set, it is inferred from the SFT checkpoint as `learning_rate * final_lr_ratio` when metadata is available.
+
+### 8. Single-Prompt SFT Evaluation
 
 AR SFT:
 ```bash
