@@ -280,5 +280,10 @@ uv run python -m scripts.eval.eval_sft_one_prompt \
 
 - LLaDA: https://arxiv.org/pdf/2502.09992
 - LLaDA 2.0: https://arxiv.org/abs/2512.15745
+- LLaDA 2.1: https://arxiv.org/abs/2602.08676
 - minimind: https://github.com/jingyaogong/minimind
 - tiny-diffusion: https://github.com/nathan-barry/tiny-diffusion
+
+## 致谢
+
+我们的训练与评测由 Lambda.ai Research Grant 赞助的 NVIDIA H100 GPU 提供支持。感谢 [Lambda](https://lambdalabs.com)！

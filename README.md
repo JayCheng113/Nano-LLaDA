@@ -280,5 +280,10 @@ Positioning:
 
 - LLaDA: https://arxiv.org/pdf/2502.09992
 - LLaDA 2.0: https://arxiv.org/abs/2512.15745
+- LLaDA 2.1: https://arxiv.org/abs/2602.08676
 - minimind: https://github.com/jingyaogong/minimind
 - tiny-diffusion: https://github.com/nathan-barry/tiny-diffusion
+
+## Acknowledgements
+
+Our training and evaluation is powered by NVIDIA H100 GPUs sponsored by the Lambda.ai Research Grant. Thanks [Lambda](https://lambdalabs.com)!
